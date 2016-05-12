@@ -51,7 +51,8 @@ class SharedMemoryDataFacade : public ContiguousInternalMemoryDataFacadeBase
                 BOOST_ASSERT(storage::SharedMemory::RegionExists(layout_region));
 
                 // Now check if this is still the newest dataset
-                const boost::interprocess::sharable_lock<boost::interprocess::named_upgradable_mutex>
+                const boost::interprocess::sharable_lock<
+                    boost::interprocess::named_upgradable_mutex>
                     lock(shared_barriers->current_regions_mutex);
 
                 auto shared_regions = storage::makeSharedMemory(storage::CURRENT_REGIONS);
@@ -60,7 +61,8 @@ class SharedMemoryDataFacade : public ContiguousInternalMemoryDataFacadeBase
 
                 if (current_timestamp->timestamp == shared_timestamp)
                 {
-                    util::Log(logDEBUG) << "Retaining data with shared timestamp " << shared_timestamp;
+                    util::Log(logDEBUG) << "Retaining data with shared timestamp "
+                                        << shared_timestamp;
                 }
                 else
                 {

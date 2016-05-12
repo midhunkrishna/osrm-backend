@@ -126,9 +126,6 @@ int Extractor::run(ScriptingEnvironment &scripting_environment)
         }
         util::Log() << "Threads: " << number_of_threads;
 
-        ExtractionContainers extraction_containers;
-        auto extractor_callbacks = std::make_unique<ExtractorCallbacks>(extraction_containers);
-
         const osmium::io::File input_file(config.input_path.string());
         osmium::io::Reader reader(input_file, osmium::io::read_meta::no);
         const osmium::io::Header header = reader.header();
@@ -139,6 +136,10 @@ int Extractor::run(ScriptingEnvironment &scripting_environment)
 
         util::Log() << "Parsing in progress..";
         TIMER_START(parsing);
+
+        ExtractionContainers extraction_containers;
+        auto extractor_callbacks = std::make_unique<ExtractorCallbacks>(
+            extraction_containers, scripting_environment.GetProfileProperties());
 
         // setup raster sources
         scripting_environment.SetupSources();
@@ -491,7 +492,9 @@ Extractor::BuildEdgeExpandedGraph(ScriptingEnvironment &scripting_environment,
                                  config.edge_output_path,
                                  config.turn_lane_data_file_name,
                                  config.edge_segment_lookup_path,
-                                 config.edge_penalty_path,
+                                 config.turn_weight_penalties_path,
+                                 config.turn_duration_penalties_path,
+                                 config.turn_penalties_index_path,
                                  config.generate_edge_lookup);
 
     WriteTurnLaneData(config.turn_lane_descriptions_file_name);

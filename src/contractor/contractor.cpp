@@ -85,24 +85,33 @@ inline EdgeWeight distanceAndSpeedToWeight(double distance_in_meters, double spe
 
 // Returns updated edge weight
 template <class IterType>
-EdgeWeight getNewWeight(IterType speed_iter,
-                        const double &segment_length,
-                        const std::vector<std::string> &segment_speed_filenames,
-                        const EdgeWeight old_weight,
-                        const double log_edge_updates_factor)
+void getNewWeight(IterType speed_iter,
+                  const double &segment_length,
+                  const std::vector<std::string> &segment_speed_filenames,
+                  const EdgeWeight current_duration,
+                  const double log_edge_updates_factor,
+                  EdgeWeight &new_segment_weight,
+                  EdgeWeight &new_segment_duration)
 {
-    const auto new_segment_weight =
+    new_segment_duration =
         (speed_iter->speed_source.speed > 0)
             ? distanceAndSpeedToWeight(segment_length, speed_iter->speed_source.speed)
             : INVALID_EDGE_WEIGHT;
+    new_segment_weight =
+        (speed_iter->speed_source.weight == INVALID_EDGE_WEIGHT)
+            ? new_segment_duration
+            : distanceAndSpeedToWeight(
+                  segment_length,
+                  speed_iter->speed_source.weight); // TODO decouple weight and duration
+
     // the check here is enabled by the `--edge-weight-updates-over-factor` flag
     // it logs a warning if the new weight exceeds a heuristic of what a reasonable weight update is
-    if (log_edge_updates_factor > 0 && old_weight != 0)
+    if (log_edge_updates_factor > 0 && current_duration != 0)
     {
-        auto new_secs = new_segment_weight / 10.0;
-        auto old_secs = old_weight / 10.0;
+        auto new_secs = new_segment_duration / 10.0;
+        auto old_secs = current_duration / 10.0;
         auto approx_original_speed = (segment_length / old_secs) * 3.6;
-        if (old_weight >= (new_segment_weight * log_edge_updates_factor))
+        if (current_duration >= (new_segment_weight * log_edge_updates_factor))
         {
             auto speed_file = segment_speed_filenames.at(speed_iter->speed_source.source - 1);
             util::Log(logWARNING) << "[weight updates] Edge weight update from " << old_secs
@@ -114,21 +123,10 @@ EdgeWeight getNewWeight(IterType speed_iter,
                                   << speed_iter->segment.to << " based on " << speed_file;
         }
     }
-
-    return new_segment_weight;
 }
 
 int Contractor::Run()
 {
-#ifdef WIN32
-#pragma message("Memory consumption on Windows can be higher due to different bit packing")
-#else
-    static_assert(sizeof(extractor::NodeBasedEdge) == 24,
-                  "changing extractor::NodeBasedEdge type has influence on memory consumption!");
-    static_assert(sizeof(extractor::EdgeBasedEdge) == 16,
-                  "changing EdgeBasedEdge type has influence on memory consumption!");
-#endif
-
     if (config.core_factor > 1.0 || config.core_factor < 0)
     {
         throw util::exception("Core factor must be between 0.0 to 1.0 (inclusive)" + SOURCE_REF);
@@ -155,7 +153,9 @@ int Contractor::Run()
                                                edge_based_edge_list,
                                                node_weights,
                                                config.edge_segment_lookup_path,
-                                               config.edge_penalty_path,
+                                               config.turn_weight_penalties_path,
+                                               config.turn_duration_penalties_path,
+                                               config.turn_penalties_index_path,
                                                config.segment_speed_lookup_paths,
                                                config.turn_penalty_lookup_paths,
                                                config.node_based_graph_path,
@@ -225,6 +225,7 @@ struct Segment final
 struct SpeedSource final
 {
     unsigned speed;
+    unsigned weight;
     std::uint8_t source;
 };
 
@@ -306,10 +307,6 @@ parse_segment_lookup_from_csv_files(const std::vector<std::string> &segment_spee
 
         SegmentSpeedSourceFlatMap local;
 
-        std::uint64_t from_node_id{};
-        std::uint64_t to_node_id{};
-        unsigned speed{};
-
         std::size_t line_number = 0;
 
         std::for_each(
@@ -320,17 +317,23 @@ parse_segment_lookup_from_csv_files(const std::vector<std::string> &segment_spee
 
                 using namespace boost::spirit::qi;
 
+                std::uint64_t from_node_id{};
+                std::uint64_t to_node_id{};
+                unsigned speed{};
+                unsigned weight = INVALID_EDGE_WEIGHT;
+
                 auto it = begin(line);
                 const auto last = end(line);
 
                 // The ulong_long -> uint64_t will likely break on 32bit platforms
-                const auto ok =
-                    parse(it,
-                          last,                                                                  //
-                          (ulong_long >> ',' >> ulong_long >> ',' >> uint_ >> *(',' >> *char_)), //
-                          from_node_id,
-                          to_node_id,
-                          speed); //
+                const auto ok = parse(it,
+                                      last,
+                                      (ulong_long >> ',' >> ulong_long >> ',' >> uint_ >>
+                                       -(',' >> uint_) >> *(',' >> *char_)),
+                                      from_node_id,
+                                      to_node_id,
+                                      speed,
+                                      weight);
 
                 if (!ok || it != last)
                 {
@@ -340,7 +343,7 @@ parse_segment_lookup_from_csv_files(const std::vector<std::string> &segment_spee
                 }
 
                 SegmentSpeedSource val{{OSMNodeID{from_node_id}, OSMNodeID{to_node_id}},
-                                       {speed, static_cast<std::uint8_t>(file_id)}};
+                                       {speed, weight, static_cast<std::uint8_t>(file_id)}};
 
                 local.push_back(std::move(val));
             });
@@ -407,11 +410,6 @@ parse_turn_penalty_lookup_from_csv_files(const std::vector<std::string> &turn_pe
                                                          storage::io::FileReader::HasNoFingerprint);
         TurnPenaltySourceFlatMap local;
 
-        std::uint64_t from_node_id{};
-        std::uint64_t via_node_id{};
-        std::uint64_t to_node_id{};
-        double penalty{};
-
         std::size_t line_number = 0;
 
         std::for_each(
@@ -421,6 +419,11 @@ parse_turn_penalty_lookup_from_csv_files(const std::vector<std::string> &turn_pe
                 ++line_number;
 
                 using namespace boost::spirit::qi;
+
+                std::uint64_t from_node_id{};
+                std::uint64_t via_node_id{};
+                std::uint64_t to_node_id{};
+                double penalty{};
 
                 auto it = begin(line);
                 const auto last = end(line);
@@ -502,7 +505,9 @@ EdgeID Contractor::LoadEdgeExpandedGraph(
     util::DeallocatingVector<extractor::EdgeBasedEdge> &edge_based_edge_list,
     std::vector<EdgeWeight> &node_weights,
     const std::string &edge_segment_lookup_filename,
-    const std::string &edge_penalty_filename,
+    const std::string &turn_weight_penalties_filename,
+    const std::string &turn_duration_penalties_filename,
+    const std::string &turn_penalties_index_filename,
     const std::vector<std::string> &segment_speed_filenames,
     const std::vector<std::string> &turn_penalty_filenames,
     const std::string &nodes_filename,
@@ -518,15 +523,14 @@ EdgeID Contractor::LoadEdgeExpandedGraph(
 
     util::Log() << "Opening " << edge_based_graph_filename;
 
-    auto mmap_file = [](const std::string &filename) {
+    auto mmap_file = [](const std::string &filename, boost::interprocess::mode_t mode) {
         using boost::interprocess::file_mapping;
         using boost::interprocess::mapped_region;
-        using boost::interprocess::read_only;
 
         try
         {
-            const file_mapping mapping{filename.c_str(), read_only};
-            mapped_region region{mapping, read_only};
+            const file_mapping mapping{filename.c_str(), mode};
+            mapped_region region{mapping, mode};
             region.advise(mapped_region::advice_sequential);
             return region;
         }
@@ -537,15 +541,30 @@ EdgeID Contractor::LoadEdgeExpandedGraph(
         }
     };
 
-    const auto edge_based_graph_region = mmap_file(edge_based_graph_filename);
+    const auto edge_based_graph_region =
+        mmap_file(edge_based_graph_filename, boost::interprocess::read_only);
 
     const bool update_edge_weights = !segment_speed_filenames.empty();
     const bool update_turn_penalties = !turn_penalty_filenames.empty();
 
-    const auto edge_penalty_region = [&] {
+    const auto turn_weight_penalties_region = [&] {
         if (update_edge_weights || update_turn_penalties)
         {
-            return mmap_file(edge_penalty_filename);
+            return mmap_file(turn_weight_penalties_filename, boost::interprocess::read_write);
+        }
+        return boost::interprocess::mapped_region();
+    }();
+    const auto turn_duration_penalties_region = [&] {
+        if (update_edge_weights || update_turn_penalties)
+        {
+            return mmap_file(turn_duration_penalties_filename, boost::interprocess::read_only);
+        }
+        return boost::interprocess::mapped_region();
+    }();
+    const auto turn_penalties_index_region = [&] {
+        if (update_edge_weights || update_turn_penalties)
+        {
+            return mmap_file(turn_penalties_index_filename, boost::interprocess::read_only);
         }
         return boost::interprocess::mapped_region();
     }();
@@ -553,7 +572,7 @@ EdgeID Contractor::LoadEdgeExpandedGraph(
     const auto edge_segment_region = [&] {
         if (update_edge_weights || update_turn_penalties)
         {
-            return mmap_file(edge_segment_lookup_filename);
+            return mmap_file(edge_segment_lookup_filename, boost::interprocess::read_only);
         }
         return boost::interprocess::mapped_region();
     }();
@@ -602,6 +621,8 @@ EdgeID Contractor::LoadEdgeExpandedGraph(
     std::vector<NodeID> m_geometry_node_list;
     std::vector<EdgeWeight> m_geometry_fwd_weight_list;
     std::vector<EdgeWeight> m_geometry_rev_weight_list;
+    std::vector<EdgeWeight> m_geometry_fwd_duration_list;
+    std::vector<EdgeWeight> m_geometry_rev_duration_list;
 
     const auto maybe_load_internal_to_external_node_map = [&] {
         if (!(update_edge_weights || update_turn_penalties))
@@ -630,6 +651,8 @@ EdgeID Contractor::LoadEdgeExpandedGraph(
         m_geometry_node_list.resize(number_of_compressed_geometries);
         m_geometry_fwd_weight_list.resize(number_of_compressed_geometries);
         m_geometry_rev_weight_list.resize(number_of_compressed_geometries);
+        m_geometry_fwd_duration_list.resize(number_of_compressed_geometries);
+        m_geometry_rev_duration_list.resize(number_of_compressed_geometries);
 
         if (number_of_compressed_geometries > 0)
         {
@@ -637,6 +660,10 @@ EdgeID Contractor::LoadEdgeExpandedGraph(
             geometry_file.ReadInto(m_geometry_fwd_weight_list.data(),
                                    number_of_compressed_geometries);
             geometry_file.ReadInto(m_geometry_rev_weight_list.data(),
+                                   number_of_compressed_geometries);
+            geometry_file.ReadInto(m_geometry_fwd_duration_list.data(),
+                                   number_of_compressed_geometries);
+            geometry_file.ReadInto(m_geometry_rev_duration_list.data(),
                                    number_of_compressed_geometries);
         }
     };
@@ -658,7 +685,7 @@ EdgeID Contractor::LoadEdgeExpandedGraph(
         // CSV file that supplied the value that gets used for that segment, then
         // we write out this list so that it can be returned by the debugging
         // vector tiles later on.
-        m_geometry_datasource.resize(m_geometry_fwd_weight_list.size(), 0);
+        m_geometry_datasource.resize(m_geometry_fwd_duration_list.size(), 0);
 
         // Now, we iterate over all the segments stored in the StaticRTree, updating
         // the packed geometry weights in the `.geometries` file (note: we do not
@@ -667,7 +694,7 @@ EdgeID Contractor::LoadEdgeExpandedGraph(
 
         using boost::interprocess::mapped_region;
 
-        auto region = mmap_file(rtree_leaf_filename.c_str());
+        auto region = mmap_file(rtree_leaf_filename.c_str(), boost::interprocess::read_only);
         region.advise(mapped_region::advice_willneed);
 
         const auto bytes = region.get_size();
@@ -692,8 +719,8 @@ EdgeID Contractor::LoadEdgeExpandedGraph(
 
                 const unsigned forward_begin =
                     m_geometry_indices.at(leaf_object.packed_geometry_id);
-                const auto current_fwd_weight =
-                    m_geometry_fwd_weight_list[forward_begin + leaf_object.fwd_segment_position];
+                const auto current_fwd_duration =
+                    m_geometry_fwd_duration_list[forward_begin + leaf_object.fwd_segment_position];
 
                 u = &(internal_to_external_node_map
                           [m_geometry_node_list[forward_begin + leaf_object.fwd_segment_position]]);
@@ -705,18 +732,24 @@ EdgeID Contractor::LoadEdgeExpandedGraph(
                     util::Coordinate{u->lon, u->lat}, util::Coordinate{v->lon, v->lat});
 
                 auto forward_speed_iter = find(
-                    segment_speed_lookup, SegmentSpeedSource{{u->node_id, v->node_id}, {0, 0}});
+                    segment_speed_lookup, SegmentSpeedSource{{u->node_id, v->node_id}, {0, 0, 0}});
                 if (forward_speed_iter != segment_speed_lookup.end())
                 {
-                    const auto new_segment_weight = getNewWeight(forward_speed_iter,
-                                                                 segment_length,
-                                                                 segment_speed_filenames,
-                                                                 current_fwd_weight,
-                                                                 log_edge_updates_factor);
+                    EdgeWeight new_segment_weight, new_segment_duration;
+                    getNewWeight(forward_speed_iter,
+                                 segment_length,
+                                 segment_speed_filenames,
+                                 current_fwd_duration,
+                                 log_edge_updates_factor,
+                                 new_segment_weight,
+                                 new_segment_duration);
 
                     m_geometry_fwd_weight_list[forward_begin + 1 +
                                                leaf_object.fwd_segment_position] =
                         new_segment_weight;
+                    m_geometry_fwd_duration_list[forward_begin + 1 +
+                                                 leaf_object.fwd_segment_position] =
+                        new_segment_duration;
                     m_geometry_datasource[forward_begin + 1 + leaf_object.fwd_segment_position] =
                         forward_speed_iter->speed_source.source;
 
@@ -729,21 +762,27 @@ EdgeID Contractor::LoadEdgeExpandedGraph(
                     counters[LUA_SOURCE] += 1;
                 }
 
-                const auto current_rev_weight =
-                    m_geometry_rev_weight_list[forward_begin + leaf_object.fwd_segment_position];
+                const auto current_rev_duration =
+                    m_geometry_rev_duration_list[forward_begin + leaf_object.fwd_segment_position];
 
                 const auto reverse_speed_iter = find(
-                    segment_speed_lookup, SegmentSpeedSource{{v->node_id, u->node_id}, {0, 0}});
+                    segment_speed_lookup, SegmentSpeedSource{{v->node_id, u->node_id}, {0, 0, 0}});
 
                 if (reverse_speed_iter != segment_speed_lookup.end())
                 {
-                    const auto new_segment_weight = getNewWeight(reverse_speed_iter,
-                                                                 segment_length,
-                                                                 segment_speed_filenames,
-                                                                 current_rev_weight,
-                                                                 log_edge_updates_factor);
+                    EdgeWeight new_segment_weight, new_segment_duration;
+                    getNewWeight(reverse_speed_iter,
+                                 segment_length,
+                                 segment_speed_filenames,
+                                 current_rev_duration,
+                                 log_edge_updates_factor,
+                                 new_segment_weight,
+                                 new_segment_duration);
+
                     m_geometry_rev_weight_list[forward_begin + leaf_object.fwd_segment_position] =
                         new_segment_weight;
+                    m_geometry_rev_duration_list[forward_begin + leaf_object.fwd_segment_position] =
+                        new_segment_duration;
                     m_geometry_datasource[forward_begin + leaf_object.fwd_segment_position] =
                         reverse_speed_iter->speed_source.source;
 
@@ -807,6 +846,10 @@ EdgeID Contractor::LoadEdgeExpandedGraph(
                               number_of_compressed_geometries * sizeof(EdgeWeight));
         geometry_stream.write(reinterpret_cast<char *>(&(m_geometry_rev_weight_list[0])),
                               number_of_compressed_geometries * sizeof(EdgeWeight));
+        geometry_stream.write(reinterpret_cast<char *>(&(m_geometry_fwd_duration_list[0])),
+                              number_of_compressed_geometries * sizeof(EdgeWeight));
+        geometry_stream.write(reinterpret_cast<char *>(&(m_geometry_rev_duration_list[0])),
+                              number_of_compressed_geometries * sizeof(EdgeWeight));
     };
 
     const auto save_datasource_indexes = [&] {
@@ -848,8 +891,14 @@ EdgeID Contractor::LoadEdgeExpandedGraph(
 
     tbb::parallel_invoke(maybe_save_geometries, save_datasource_indexes, save_datastore_names);
 
-    auto penaltyblock = reinterpret_cast<const extractor::lookup::PenaltyBlock *>(
-        edge_penalty_region.get_address());
+    auto turn_weight_penalty_ptr = reinterpret_cast<TurnPenalty *>(
+        reinterpret_cast<char *>(turn_weight_penalties_region.get_address()) +
+        sizeof(extractor::lookup::TurnPenaltiesHeader));
+    // TODO MKR auto turn_duration_penalty_ptr = reinterpret_cast<TurnPenalty *>(
+    //     reinterpret_cast<char *>(turn_duration_penalties_region.get_address()) +
+    //     sizeof(extractor::lookup:TurnPenaltiesHeader));
+    auto turn_index_block_ptr = reinterpret_cast<const extractor::lookup::TurnIndexBlock *>(
+        turn_penalties_index_region.get_address());
     auto edge_segment_byte_ptr = reinterpret_cast<const char *>(edge_segment_region.get_address());
     auto edge_based_edge_ptr = reinterpret_cast<extractor::EdgeBasedEdge *>(
         reinterpret_cast<char *>(edge_based_graph_region.get_address()) +
@@ -888,7 +937,7 @@ EdgeID Contractor::LoadEdgeExpandedGraph(
                 auto speed_iter =
                     find(segment_speed_lookup,
                          SegmentSpeedSource{
-                             previous_osm_node_id, segmentblocks[i].this_osm_node_id, {0, 0}});
+                             previous_osm_node_id, segmentblocks[i].this_osm_node_id, {0, 0, 0}});
                 if (speed_iter != segment_speed_lookup.end())
                 {
                     if (speed_iter->speed_source.speed > 0)
@@ -925,36 +974,50 @@ EdgeID Contractor::LoadEdgeExpandedGraph(
             // effectively removes it from the routing network.
             if (skip_this_edge)
             {
-                penaltyblock++;
+                turn_index_block_ptr++;
+                turn_weight_penalty_ptr++;
+                // TODO MKR turn_duration_penalty_ptr++;
                 continue;
             }
 
-            auto turn_iter =
-                find(turn_penalty_lookup,
-                     TurnPenaltySource{
-                         penaltyblock->from_id, penaltyblock->via_id, penaltyblock->to_id, {0, 0}});
+            auto turn_weight_penalty = *turn_weight_penalty_ptr;
+            // TODO MKR auto turn_duration_penalty = *turn_duration_penalty_ptr;
+
+            const auto turn_iter = find(turn_penalty_lookup,
+                                        TurnPenaltySource{{turn_index_block_ptr->from_id,
+                                                           turn_index_block_ptr->via_id,
+                                                           turn_index_block_ptr->to_id},
+                                                          {0, 0}});
             if (turn_iter != turn_penalty_lookup.end())
             {
-                int new_turn_weight = static_cast<int>(turn_iter->penalty_source.penalty * 10);
-
-                if (new_turn_weight + new_weight < compressed_edge_nodes)
+                auto turn_weight_penalty_100ms = turn_iter->penalty_source.penalty * 10;
+                if (turn_weight_penalty_100ms + new_weight < compressed_edge_nodes)
                 {
                     util::Log(logWARNING) << "turn penalty " << turn_iter->penalty_source.penalty
-                                          << " for turn " << penaltyblock->from_id << ", "
-                                          << penaltyblock->via_id << ", " << penaltyblock->to_id
+                                          << " for turn " << turn_index_block_ptr->from_id << ", "
+                                          << turn_index_block_ptr->via_id << ", "
+                                          << turn_index_block_ptr->to_id
                                           << " is too negative: clamping turn weight to "
-                                          << compressed_edge_nodes;
+                                          << (compressed_edge_nodes - new_weight);
+
+                    turn_weight_penalty =
+                        boost::numeric_cast<TurnPenalty>(compressed_edge_nodes - new_weight);
                 }
-
-                inbuffer.weight = std::max(new_turn_weight + new_weight, compressed_edge_nodes);
+                else
+                {
+                    turn_weight_penalty =
+                        boost::numeric_cast<TurnPenalty>(turn_weight_penalty_100ms);
+                }
             }
-            else
-            {
-                inbuffer.weight = penaltyblock->fixed_penalty + new_weight;
-            }
 
-            // Increment the pointer
-            penaltyblock++;
+            inbuffer.weight = turn_weight_penalty + new_weight;
+            // FIXME update the turn penalty
+            *turn_weight_penalty_ptr = turn_weight_penalty;
+
+            // Increment pointers
+            turn_index_block_ptr++;
+            turn_weight_penalty_ptr++;
+            // TODO MKR turn_duration_penalty_ptr++;
         }
 
         edge_based_edge_list.emplace_back(std::move(inbuffer));

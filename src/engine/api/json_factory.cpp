@@ -241,6 +241,7 @@ util::json::Object makeRouteStep(guidance::RouteStep step, util::json::Value geo
     util::json::Object route_step;
     route_step.values["distance"] = std::round(step.distance * 10) / 10.;
     route_step.values["duration"] = std::round(step.duration * 10) / 10.;
+    route_step.values["weight"] = std::round(step.weight * 10) / 10.;
     route_step.values["name"] = std::move(step.name);
     if (!step.ref.empty())
         route_step.values["ref"] = std::move(step.ref);
@@ -274,9 +275,11 @@ util::json::Object makeRouteStep(guidance::RouteStep step, util::json::Value geo
 
 util::json::Object makeRoute(const guidance::Route &route,
                              util::json::Array legs,
-                             boost::optional<util::json::Value> geometry)
+                             boost::optional<util::json::Value> geometry,
+                             const char *weight_name)
 {
     util::json::Object json_route;
+    json_route.values["weight_name"] = weight_name;
     json_route.values["distance"] = std::round(route.distance * 10) / 10.;
     json_route.values["duration"] = std::round(route.duration * 10) / 10.;
     json_route.values["legs"] = std::move(legs);
