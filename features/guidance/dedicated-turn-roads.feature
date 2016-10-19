@@ -41,11 +41,11 @@ Feature: Slipways and Dedicated Turn Lanes
             """
                     e
             a-b-----c-------------------------d
-                 `h |
+               `--h |
                    ||
                   1||
-                   `|
-                    f
+                   ||
+                   `f
                     |
                     g
             """
@@ -71,19 +71,19 @@ Feature: Slipways and Dedicated Turn Lanes
     Scenario: Turn Instead of Ramp
         Given the node map
             """
-                    e
-            a b     c d
-                  h
-
-
-
-
-
-
-
+                    e---.
+            a-b----]c[d |
+               `--h     |
+                   \    /
+                    |  /
+                    | /
+                    |/
+                    |
+                    |
+                    |
                     f
-
-
+                    |
+                    |
                     g
             """
 
@@ -100,15 +100,15 @@ Feature: Slipways and Dedicated Turn Lanes
     Scenario: Turn Instead of Ramp
         Given the node map
             """
-                    e
-            a b     c d
-                  h
-
-
-
+                    e---.
+            a-b----]c[d |
+               `--h     |
+                   \   /
+                    | /
+                    |/
                     f
-
-
+                    |
+                    |
                     g
             """
 
@@ -157,12 +157,12 @@ Feature: Slipways and Dedicated Turn Lanes
         Given the node map
             """
             a   f
-
+            |   |
             b   e
-
-
-              g
-
+            |\ /|
+            | | |
+            | g |
+            |   |
             c   d
             """
 
@@ -180,11 +180,11 @@ Feature: Slipways and Dedicated Turn Lanes
         Given the node map
             """
             a   f
-
+            |   |
             b   e
-              g
-
-
+            |\g/|
+            |   |
+            |   |
             c   d
             """
 
@@ -281,23 +281,23 @@ Feature: Slipways and Dedicated Turn Lanes
     Scenario: Self-Loop
         Given the node map
             """
-                                                      l     k
-                                                                  j
-                                                  m
-                                                                      i
-
-
-                                                                        h
-
-                                                n
-
-                                                                        g
-                                                o
-
-                                                                      f
-                                              p
-                                                                  e
-            a         b                 c                   d
+                                                    /-l-----k---\
+                                                   /             `j--
+                                                  m                  \
+                                                 /                    i
+                                                /                      \
+                                                |                       \ 
+                                                |                       h
+                                                |                       |
+                                                n                       |
+                                                |                       |
+                                                |                       g
+                                                o                       |
+                                               /                       /
+                                              |                       f
+                                           /- p                     /
+                                          /                        e
+            a ------- b --------------- c ----------------- d ---/
             """
 
      And the ways
@@ -316,23 +316,23 @@ Feature: Slipways and Dedicated Turn Lanes
     Scenario: Self-Loop - Bidirectional
         Given the node map
             """
-                                                      l     k
-                                                                  j
-                                                  m
-                                                                      i
-
-
-                                                                        h
-
-                                                n
-
-                                                                        g
-                                                o
-
-                                                                      f
-                                              p
-                                                                  e
-            a         b                 c                   d
+                                                    /-l-----k---\
+                                                   /             `j--
+                                                  m                  \
+                                                 /                    i
+                                                /                      \
+                                                |                       \ 
+                                                |                       h
+                                                |                       |
+                                                n                       |
+                                                |                       |
+                                                |                       g
+                                                o                       |
+                                               /                       /
+                                              |                       f
+                                           /- p                     /
+                                          /                        e
+            a ------- b --------------- c ----------------- d ---/
             """
 
      And the ways
@@ -349,31 +349,30 @@ Feature: Slipways and Dedicated Turn Lanes
         Given the node map
             """
                                                           j
-            a b                                           c             d
-
-
-
-
-
-                    e
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                                                          1
-
-                                                f         g
-
+            a-b ----------------------------------------- c ------------d
+               \                                          |
+                \                                         |
+                 \                                        |
+                  \                                       |
+                   \                                      |
+                    e                                     |
+                     \                                    |
+                      \                                   |
+                       \                                  |
+                        \                                 |
+                         \                                |
+                          \                               |
+                           \                              |
+                            \                             |
+                             \                            |
+                              \                           |
+                               \                          |
+                                \                         |
+                                 \                        |
+                                  \                       |
+                                   \                      1
+                                    `---------- f ------- g ----------\
+                                                          |            \
                                                           i             h
             """
 
@@ -398,20 +397,20 @@ Feature: Slipways and Dedicated Turn Lanes
     Scenario: Turn Instead of Ramp
         Given the node map
             """
-                                          f
-                    g           h
-                                    d     e
-            i       c           j
-
-
-
-
-
-
-
-
+                     /--------------------f
+                    g-----------h--\      |
+                                    d-----e
+            i       c-----------j--/
+            |       |
+            |       |
+            |       |
+            |       |
+            |       |
+             \     / 
+              \   /
+               \ /
                 b
-
+                |
                 a
             """
 
