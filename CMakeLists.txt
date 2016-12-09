@@ -651,9 +651,13 @@ if(BUILD_TOOLS)
   add_executable(osrm-springclean src/tools/springclean.cpp $<TARGET_OBJECTS:UTIL>)
   target_link_libraries(osrm-springclean ${BOOST_BASE_LIBRARIES})
 
+  add_executable(osrm-extract-conditionals src/tools/extract-conditionals.cpp $<TARGET_OBJECTS:UTIL>)
+  target_link_libraries(osrm-extract-conditionals ${OSMIUM_LIBRARIES} ${BOOST_BASE_LIBRARIES} -lshp)
+
   install(TARGETS osrm-io-benchmark DESTINATION bin)
   install(TARGETS osrm-unlock-all DESTINATION bin)
   install(TARGETS osrm-springclean DESTINATION bin)
+  install(TARGETS osrm-extract-conditionals DESTINATION bin)
 endif()
 
 if (ENABLE_ASSERTIONS)
