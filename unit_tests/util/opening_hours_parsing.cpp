@@ -22,7 +22,7 @@ BOOST_AUTO_TEST_CASE(check_opening_hours_grammar)
         "Mo-Su 08:00-18:00; Apr 10-15 off; Jun 08:00-14:00; Aug off; Dec 25 off"));
     BOOST_CHECK(extractor::parseOpeningHours("Mo-Sa 10:00-20:00; Tu off"));
     BOOST_CHECK(extractor::parseOpeningHours("Mo-Sa 10:00-20:00; Tu 10:00-14:00"));
-    BOOST_CHECK(extractor::parseOpeningHours("sunrise-sunset"));
+    BOOST_CHECK(extractor::parseOpeningHours("sunrise-(sunset-01:30)"));
 
     BOOST_CHECK(extractor::parseOpeningHours("Su 10:00+"));
     BOOST_CHECK(
@@ -35,6 +35,10 @@ BOOST_AUTO_TEST_CASE(check_opening_hours_grammar)
 
     BOOST_CHECK(extractor::parseOpeningHours("08:30-12:30,15:30-20:00"));
     BOOST_CHECK(extractor::parseOpeningHours("Tu,Th 16:00-20:00"));
+
+    BOOST_CHECK(extractor::parseOpeningHours("2016 Feb-2017 Dec"));
+
+    BOOST_CHECK(extractor::parseOpeningHours("2016-2017"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
