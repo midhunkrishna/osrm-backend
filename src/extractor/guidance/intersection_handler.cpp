@@ -1,5 +1,6 @@
 #include "extractor/guidance/intersection_handler.hpp"
 #include "extractor/guidance/constants.hpp"
+#include "extractor/travel_mode.hpp"
 
 #include "util/guidance/name_announcements.hpp"
 #include "util/log.hpp"
@@ -37,6 +38,27 @@ IntersectionHandler::IntersectionHandler(const util::NodeBasedDynamicGraph &node
 {
 }
 
+bool IntersectionHandler::SuppressModeNavigation(const EdgeID &via_edge,
+                                                 const EdgeID &connected,
+                                                 const std::array<TravelMode, 2> &SUPPRESS_MODE_LIST) const
+{
+    const auto in_mode = node_based_graph.GetEdgeData(via_edge).travel_mode;
+    const auto out_mode = node_based_graph.GetEdgeData(connected).travel_mode;
+    return IntersectionHandler::SuppressModeNavigation(in_mode, out_mode, SUPPRESS_MODE_LIST);
+}
+
+bool IntersectionHandler::SuppressModeNavigation(const TravelMode &in_mode,
+                                                 const TravelMode &out_mode,
+                                                 const std::array<TravelMode, 2> &SUPPRESS_MODE_LIST) const
+{
+    const auto suppress_in_mode = std::find(begin(SUPPRESS_MODE_LIST), end(SUPPRESS_MODE_LIST), in_mode);
+    if (suppress_in_mode != end(SUPPRESS_MODE_LIST))
+    {
+        return in_mode == out_mode;
+    }
+    return true;
+}
+
 TurnType::Enum IntersectionHandler::findBasicTurnType(const EdgeID via_edge,
                                                       const ConnectedRoad &road) const
 {
@@ -71,6 +93,11 @@ TurnInstruction IntersectionHandler::getInstructionForObvious(const std::size_t 
     // handle travel modes:
     const auto in_mode = node_based_graph.GetEdgeData(via_edge).travel_mode;
     const auto out_mode = node_based_graph.GetEdgeData(road.eid).travel_mode;
+    if (SuppressModeNavigation(in_mode, out_mode, SUPPRESS_MODE_LIST))
+    {
+        return {TurnType::NoTurn, getTurnDirection(road.angle)};
+    }
+
     if (type == TurnType::OnRamp)
     {
         return {TurnType::OnRamp, getTurnDirection(road.angle)};
@@ -325,8 +352,14 @@ void IntersectionHandler::assignTrivialTurns(const EdgeID via_eid,
 {
     for (std::size_t index = begin; index != end; ++index)
         if (intersection[index].entry_allowed)
+        {
+            if (SuppressModeNavigation(via_eid, intersection[index].eid, SUPPRESS_MODE_LIST))
+            {
+                intersection[index].instruction = {TurnType::NoTurn, getTurnDirection(intersection[index].angle)};
+            }
             intersection[index].instruction = {findBasicTurnType(via_eid, intersection[index]),
                                                getTurnDirection(intersection[index].angle)};
+        }
 }
 
 bool IntersectionHandler::isThroughStreet(const std::size_t index,

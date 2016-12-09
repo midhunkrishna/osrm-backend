@@ -28,6 +28,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #ifndef TRAVEL_MODE_HPP
 #define TRAVEL_MODE_HPP
 
+#include <array>
+
 namespace osrm
 {
 namespace extractor
@@ -52,5 +54,8 @@ const constexpr osrm::extractor::TravelMode TRAVEL_MODE_STEPS_DOWN = 9;
 const constexpr osrm::extractor::TravelMode TRAVEL_MODE_RIVER_UP = 10;
 const constexpr osrm::extractor::TravelMode TRAVEL_MODE_RIVER_DOWN = 11;
 const constexpr osrm::extractor::TravelMode TRAVEL_MODE_ROUTE = 12;
+
+// travel modes for which navigation should be suppressed
+const std::array<osrm::extractor::TravelMode, 2> constexpr SUPPRESS_MODE_LIST = {{TRAVEL_MODE_TRAIN, TRAVEL_MODE_FERRY}};
 
 #endif /* TRAVEL_MODE_HPP */
