@@ -78,13 +78,13 @@ Feature: Collapse
             """
 
         And the ways
-            | nodes | highway | route | name                |
-            | ea    | primary |       | melee-island        |
-            | ab    |         | ferry | melee-island-ferry  |
-            | cf    | primary |       | monkey-island       |
-            | bd    | primary |       | landmass            |
-            | bc    | primary | ferry | monkey-island-ferry |
+            | nodes | highway | route | name                  |
+            | ea    | primary |       | melee-island          |
+            | ab    |         | ferry | melee-island-ferry    |
+            | cf    | primary |       | pennydog-island       |
+            | bd    | primary |       | landmass              |
+            | bc    | primary | ferry | pennydog-island-ferry |
 
         When I route I should get
             | waypoints | route                                                                           | turns                                                                | modes                               |
-            | e,f       | melee-island,melee-island-ferry,monkey-island-ferry,monkey-island,monkey-island | depart,notification straight,turn right,notification straight,arrive | driving,ferry,ferry,driving,driving |
+            | e,f       | melee-island,melee-island-ferry,pennydog-island-ferry,pennydog-island,pennydog-island | depart,notification straight,turn right,notification straight,arrive | driving,ferry,ferry,driving,driving |
