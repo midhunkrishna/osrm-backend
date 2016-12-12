@@ -1,3 +1,4 @@
+#include "util/opening_hours.hpp"
 #include "util/log.hpp"
 
 #include <boost/geometry.hpp>
@@ -40,30 +41,6 @@ using rtree_t =
     boost::geometry::index::rtree<std::pair<box_t, size_t>, boost::geometry::index::rstar<8>>;
 using local_time_t = std::pair<polygon_t, struct tm>;
 
-struct LocalTimeClock
-{
-    LocalTimeClock(const time_t utc) : utc(utc) {}
-
-    struct tm operator()(const char *tzname)
-    { // Thread safety: MT-Unsafe const:env
-        auto it = memo.find(tzname);
-        if (it == memo.end())
-        {
-            struct tm timeinfo;
-            setenv("TZ", tzname, 1);
-            tzset();
-            localtime_r(&utc, &timeinfo);
-            it = memo.insert({tzname, timeinfo}).first;
-        }
-
-        return it->second;
-    }
-
-  private:
-    const time_t utc;
-    std::unordered_map<std::string, struct tm> memo;
-};
-
 #include <osmium/handler/node_locations_for_ways.hpp>
 #include <osmium/index/map/sparse_mem_array.hpp>
 #include <osmium/relations/collector.hpp>
@@ -75,10 +52,10 @@ class ConditionalRestrictionsCollector
     : public osmium::relations::Collector<ConditionalRestrictionsCollector, true, true, false>
 {
   public:
-    using action_t = std::function<void(const osmium::Way &, const osmium::Node &, const osmium::Way &, const char *)>;
+    using action_t = std::function<void(
+        const osmium::Way &, const osmium::Node &, const osmium::Way &, const char *)>;
 
-    ConditionalRestrictionsCollector(filter_t filter, action_t action)
-        : tag_filter(false), filter(filter), action(action)
+    ConditionalRestrictionsCollector(action_t action) : tag_filter(false), action(action)
     {
         tag_filter.add(true, std::regex("^restriction.*conditional$"));
     }
@@ -138,12 +115,12 @@ class ConditionalRestrictionsCollector
 
   private:
     osmium::tags::Filter<std::regex> tag_filter;
-    filter_t filter;
     action_t action;
 };
 
 int main(int argc, char *argv[])
 {
+    // TODO: add program arguments
     const time_t utc_time = 1481242873;
     std::string osm_file = "map.osm";
     //"germany-latest.osm.pbf"; /*config.input_path.string()*/
@@ -151,7 +128,7 @@ int main(int argc, char *argv[])
 
     osrm::util::LogPolicy::GetInstance().Unmute();
 
-    // Load time zones shapes and local times of utc_time
+    // Load time zones shapes and collect local times of utc_time
     auto shphandle = SHPOpen(timezone_file.c_str(), "rb");
     auto dbfhandle = DBFOpen(timezone_file.c_str(), "rb");
 
@@ -172,7 +149,24 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    LocalTimeClock local_clock(utc_time);
+    // Lambda function that returns local time in the tzname time zone
+    std::unordered_map<std::string, struct tm> local_time_memo;
+    auto get_local_time_in_tz =
+        [&utc_time, &local_time_memo](const char *tzname) { // Thread safety: MT-Unsafe const:env
+            auto it = local_time_memo.find(tzname);
+            if (it == local_time_memo.end())
+            {
+                struct tm timeinfo;
+                setenv("TZ", tzname, 1);
+                tzset();
+                localtime_r(&utc_time, &timeinfo);
+                it = local_time_memo.insert({tzname, timeinfo}).first;
+            }
+
+            return it->second;
+        };
+
+    // Get all time zone shapes and save local times
     std::vector<rtree_t::value_type> polygons;
     std::vector<local_time_t> local_times;
     for (int shape = 0; shape < num_entities; ++shape)
@@ -180,6 +174,7 @@ int main(int argc, char *argv[])
         auto object = SHPReadObject(shphandle, shape);
         if (object && object->nSHPType == SHPT_POLYGON)
         {
+            // Find time zone polygon and place its bbox in into R-Tree
             polygon_t polygon;
             for (int vertex = 0; vertex < object->nVertices; ++vertex)
             {
@@ -189,9 +184,9 @@ int main(int argc, char *argv[])
             polygons.emplace_back(boost::geometry::return_envelope<box_t>(polygon),
                                   local_times.size());
 
-            // get time zone name and resolve UTC to local time
+            // Get time zone name and emplace polygon and local time for the UTC input
             const auto tzname = DBFReadStringAttribute(dbfhandle, shape, tzid);
-            local_times.emplace_back(local_time_t{polygon, local_clock(tzname)});
+            local_times.emplace_back(local_time_t{polygon, get_local_time_in_tz(tzname)});
 
             // std::cout << boost::geometry::dsv(boost::geometry::return_envelope<box_t>(polygon))
             //           << " " << tzname << " " << asctime(&local_times.back().second);
@@ -205,7 +200,9 @@ int main(int argc, char *argv[])
 
     // Create R-tree for collected shape polygons
     rtree_t rtree(polygons);
-    auto get_local_time = [&rtree, &local_times](const point_t &point) {
+
+    // Get local time at the input point
+    auto get_local_time_at_point = [&rtree, &local_times](const point_t &point) {
         std::vector<rtree_t::value_type> result;
         rtree.query(boost::geometry::index::intersects(point), std::back_inserter(result));
         for (const auto v : result)
@@ -217,25 +214,30 @@ int main(int argc, char *argv[])
         return tm{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     };
 
+    // Read OSM input file
     const osmium::io::File input_file(osm_file);
 
-    ConditionalRestrictionsCollector collector(
-        [&rtree, &get_local_time](const osmium::Way &from, const osmium::Node &via, const osmium::Way &to, const char *condition) {
-            const auto &local_time =
-                get_local_time(point_t{via.location().lon(), via.location().lat()});
-            std::cout << condition << asctime(&local_time);
+    ConditionalRestrictionsCollector collector([&get_local_time_at_point](const osmium::Way &from,
+                                                                          const osmium::Node &via,
+                                                                          const osmium::Way &to,
+                                                                          const char *condition) {
 
-            const auto& opening_hours = parseOpeningHours(condition);
-            if (!checkOpeningHours(opening_hours, local_time))
-                return;
+        // Get local time of the via point
+        const auto &local_time =
+            get_local_time_at_point(point_t{via.location().lon(), via.location().lat()});
 
+        // Find the first matching condition
+        const auto &opening_hours = osrm::util::ParseOpeningHours(condition);
+        if (!osrm::util::CheckOpeningHours(opening_hours, local_time))
+            return;
 
-            //std::cout << from.nodes().size() << " " << from.nodes().back().location() << "\n";
-            //std::cout << via.location() << "\n";
-            //std::cout << to.nodes().size() << " " << to.nodes().front().location() << "\n";
+        // TODO print CSV line
+        // std::cout << from.nodes().size() << " " << from.nodes().back().location() << "\n";
+        // std::cout << via.location() << "\n";
+        // std::cout << to.nodes().size() << " " << to.nodes().front().location() << "\n";
 
-            std::cout << "print me!";
-        });
+        std::cout << "TODO print me!";
+    });
 
     // Read relations
     osmium::io::Reader reader1(
@@ -276,60 +278,4 @@ int main(int argc, char *argv[])
 
     std::cerr << "Memory:\n";
     collector.used_memory();
-
-    // osmium::tags::Filter<std::regex> filter(false);
-    // // filter.add(true, std::regex("^restriction.*conditional$"));
-    // filter.add(true, std::regex(".*conditional$"));
-
-    // auto type = [](auto t) -> std::string {
-    //                 switch(t) {
-    //                 case osmium::item_type::node: return "<n>";
-    //                 case osmium::item_type::way: return "<w>";
-    //                 case osmium::item_type::relation: return "<r>";
-    //                 default: break;
-    //                 }
-    //                 return std::string();
-    //             };
-
-    // while (const osmium::memory::Buffer buffer = reader.read())
-    // {
-    //     for (auto iter = std::begin(buffer), end = std::end(buffer); iter != end; ++iter)
-    //     {
-    //         // osmium::item_type::node osmium::Node
-    //         // osmium::item_type::way osmium::Way
-    //         //
-    //         //if (iter->type() == osmium::item_type::relation)
-    //         {
-    //             const auto& relation = static_cast<const osmium::Relation &>(*iter);
-
-    //             const osmium::TagList &tag_list = relation.tags();
-    //             decltype(filter)::iterator fi_begin(filter, tag_list.begin(), tag_list.end());
-    //             const decltype(filter)::iterator fi_end(filter, tag_list.end(), tag_list.end());
-
-    //             if (std::distance(fi_begin, fi_end) == 0)
-    //                 continue;
-
-    //             std::cout << type(relation.type()) << relation.id();
-    //             if (relation.members().size() > 0)
-    //             {
-    //                 std::cout << " [";
-    //                 for (const auto &member : relation.members())
-    //                 {
-    //                     std::cout << member.role() << " " << type(member.type()) << member.ref()
-    //                     << " ";
-    //                 }
-    //                 std::cout << "] ";
-    //             }
-
-    //             for (; fi_begin != fi_end; ++fi_begin)
-    //             {
-    //                 const auto& key = fi_begin->key();
-    //                 const auto& value = fi_begin->value();
-
-    //                 std::cout << " " << key << "=" << value << " ";
-    //             }
-    //             std::cout << "\n";
-    //         }
-    //     }
-    // }
 }

@@ -3,6 +3,7 @@
 
 //#define BOOST_SPIRIT_DEBUG
 
+#include <boost/date_time/gregorian/gregorian.hpp>
 #include <boost/spirit/include/phoenix.hpp>
 #include <boost/spirit/include/qi.hpp>
 
@@ -15,27 +16,23 @@
 #include <limits>
 #include <string>
 
-std::ostream &operator<<(std::ostream &stream, const struct tm &value)
-{
-    char s[128];
-    strftime(s, sizeof(s), "%a, %d %b %Y %T %z", &value);
-    return stream << s;
-}
-
-std::ostream &operator<<(std::ostream &stream, const std::pair<struct tm, struct tm> &value)
-{
-    return stream << value.first << "-" << value.second;
-}
-
 namespace osrm
 {
-namespace extractor
+namespace util
 {
 
+// Helper classes for "opening hours" format http://wiki.openstreetmap.org/wiki/Key:opening_hours
+// Supported simplified features in CheckOpeningHours:
+// - Year/Month/Day ranges
+// - Weekday ranges
+// - Time ranges
+// Not supported:
+// - Week numbers
+// - Holidays, events, variables dates
+// - Times which span over midnight
+// - Day offsets and periodic ranges
 struct OpeningHours
 {
-    using DateTime = struct tm;
-
     enum Modifier
     {
         unknown,
@@ -58,15 +55,13 @@ struct OpeningHours
         };
 
         Event event;
-        char hour;
-        char min;
-        char positive;
+        std::int32_t minutes;
 
-        Time() : event(invalid), hour(0), min(0), positive(false) {}
-        Time(Event event) : event(event), hour(0), min(0), positive(true) {}
-        Time(char hour, char min) : event(none), hour(hour), min(min), positive(true) {}
+        Time() : event(invalid), minutes(0) {}
+        Time(Event event) : event(event), minutes(0) {}
+        Time(char hour, char min) : event(none), minutes(hour * 60 + min) {}
         Time(Event event, bool positive, const Time &offset)
-            : event(event), hour(offset.hour), min(offset.min), positive(positive)
+            : event(event), minutes(positive ? offset.minutes : -offset.minutes)
         {
         }
     };
@@ -76,13 +71,32 @@ struct OpeningHours
         Time from, to;
         TimeSpan() {}
         TimeSpan(const Time &from, const Time &to) : from(from), to(to) {}
+
+        bool IsInRange(const struct tm &time) const
+        {
+            if (from.event != OpeningHours::Time::none || to.event != OpeningHours::Time::none ||
+                to.minutes > 24 * 60)
+                return false;
+
+            const auto minutes = time.tm_hour * 60 + time.tm_min;
+            return from.minutes <= minutes && minutes < to.minutes;
+        }
     };
 
     struct WeekdayRange
     {
-        char from, to;
-        WeekdayRange() : from(0), to(0) {}
-        WeekdayRange(char from, char to) : from(from), to(to) {}
+        int weekdays;
+        WeekdayRange() : weekdays(0) {}
+        WeekdayRange(unsigned char from, unsigned char to)
+        {
+            // weekdays mask for [from, to], e.g [2, 5] -> 0111100, [5, 2] -> 1100111,
+            //  [3, 3] -> 0001000, [0,6] -> 1111111, [6,0] -> 1000001, [4, 3] -> 1111111
+            weekdays = (from <= to) ? ((1 << (to - from + 1)) - 1) << from
+                                    : ~(((1 << (from - to - 1)) - 1) << (to + 1));
+            weekdays &= 0x7f;
+        }
+
+        bool IsInRange(const struct tm &time) const { return weekdays & (1 << time.tm_wday); }
     };
 
     struct Monthday
@@ -93,6 +107,8 @@ struct OpeningHours
         Monthday() : year(0), month(0), day(0) {}
         Monthday(int year) : year(year), month(0), day(0) {}
         Monthday(int year, char month, char day) : year(year), month(month), day(day) {}
+
+        bool IsValid() const { return year != 0 || month != 0 || day != 0; }
     };
 
     struct MonthdayRange
@@ -100,11 +116,54 @@ struct OpeningHours
         Monthday from, to;
         MonthdayRange() : from(0, 0, 0), to(0, 0, 0) {}
         MonthdayRange(const Monthday &from, const Monthday &to) : from(from), to(to) {}
+
+        bool IsInRange(const struct tm &time) const
+        {
+            using boost::gregorian::date;
+
+            const auto year = time.tm_year + 1900;
+            const auto month = time.tm_mon + 1;
+
+            date date_current(year, month, time.tm_mday);
+            date date_from(boost::gregorian::min_date_time);
+            date date_to(boost::gregorian::max_date_time);
+
+            if (from.IsValid())
+            {
+                date_from = (from.day == 0) ? date(from.year == 0 ? year : from.year,
+                                                   from.month == 0 ? month : from.month,
+                                                   1)
+                                            : date(from.year == 0 ? year : from.year,
+                                                   from.month == 0 ? month : from.month,
+                                                   from.day);
+            }
+            if (to.IsValid())
+            {
+                date_to = date(to.year == 0 ? (from.year == 0 ? year : from.year) : to.year,
+                               to.month == 0 ? (from.month == 0 ? month : from.month) : to.month,
+                               1);
+                date_to = (to.day == 0) ? date_to.end_of_month()
+                                        : date(date_to.year(), date_to.month(), to.day);
+            }
+
+            return date_from <= date_current && date_current <= date_to;
+        }
     };
 
     OpeningHours() : modifier(open) {}
 
-    bool IsOpen(const struct tm &tm) const { return false; }
+    bool IsInRange(const struct tm &time) const
+    {
+        return (times.empty() || std::any_of(times.begin(),
+                                             times.end(),
+                                             [&time](auto x) { return x.IsInRange(time); })) &&
+               (weekdays.empty() || std::any_of(weekdays.begin(),
+                                                weekdays.end(),
+                                                [&time](auto x) { return x.IsInRange(time); })) &&
+               (monthdays.empty() || std::any_of(monthdays.begin(),
+                                                 monthdays.end(),
+                                                 [&time](auto x) { return x.IsInRange(time); }));
+    }
 
     std::vector<TimeSpan> times;
     std::vector<WeekdayRange> weekdays;
@@ -112,7 +171,7 @@ struct OpeningHours
     Modifier modifier;
 };
 
-std::ostream &operator<<(std::ostream &stream, const OpeningHours::Modifier value)
+inline std::ostream &operator<<(std::ostream &stream, const OpeningHours::Modifier value)
 {
     switch (value)
     {
@@ -130,7 +189,7 @@ std::ostream &operator<<(std::ostream &stream, const OpeningHours::Modifier valu
     return stream;
 }
 
-std::ostream &operator<<(std::ostream &stream, const OpeningHours::Time::Event value)
+inline std::ostream &operator<<(std::ostream &stream, const OpeningHours::Time::Event value)
 {
     switch (value)
     {
@@ -148,30 +207,26 @@ std::ostream &operator<<(std::ostream &stream, const OpeningHours::Time::Event v
     return stream;
 }
 
-std::ostream &operator<<(std::ostream &stream, const OpeningHours::Time &value)
+inline std::ostream &operator<<(std::ostream &stream, const OpeningHours::Time &value)
 {
     boost::io::ios_flags_saver ifs(stream);
     if (value.event == OpeningHours::Time::invalid)
         return stream << "???";
     if (value.event == OpeningHours::Time::none)
-        return stream << std::setfill('0') << std::setw(2) << (int)value.hour << ":"
-                      << std::setfill('0') << std::setw(2) << (int)value.min;
+        return stream << std::setfill('0') << std::setw(2) << value.minutes / 60 << ":"
+                      << std::setfill('0') << std::setw(2) << value.minutes % 60;
     stream << value.event;
-    if (value.hour != 0)
-        stream << (value.positive ? '+' : '-') << std::setfill('0') << std::setw(2)
-               << (int)value.hour << ":" << std::setfill('0') << std::setw(2) << (int)value.min;
-    else if (value.min != 0)
-        stream << (value.positive ? '+' : '-') << std::setfill('0') << std::setw(2)
-               << (int)value.min;
+    if (value.minutes != 0)
+        stream << value.minutes;
     return stream;
 }
 
-std::ostream &operator<<(std::ostream &stream, const OpeningHours::TimeSpan &value)
+inline std::ostream &operator<<(std::ostream &stream, const OpeningHours::TimeSpan &value)
 {
     return stream << value.from << "-" << value.to;
 }
 
-std::ostream &operator<<(std::ostream &stream, const OpeningHours::Monthday &value)
+inline std::ostream &operator<<(std::ostream &stream, const OpeningHours::Monthday &value)
 {
     bool empty = true;
     if (value.year != 0)
@@ -191,19 +246,18 @@ std::ostream &operator<<(std::ostream &stream, const OpeningHours::Monthday &val
     return stream;
 }
 
-std::ostream &operator<<(std::ostream &stream, const OpeningHours::WeekdayRange &value)
+inline std::ostream &operator<<(std::ostream &stream, const OpeningHours::WeekdayRange &value)
 {
-    if (value.to == 0)
-        return stream << (int)value.from;
-    return stream << (int)value.from << "-" << (int)value.to;
+    boost::io::ios_flags_saver ifs(stream);
+    return stream << std::hex << std::setfill('0') << std::setw(2) << value.weekdays;
 }
 
-std::ostream &operator<<(std::ostream &stream, const OpeningHours::MonthdayRange &value)
+inline std::ostream &operator<<(std::ostream &stream, const OpeningHours::MonthdayRange &value)
 {
     return stream << value.from << "-" << value.to;
 }
 
-std::ostream &operator<<(std::ostream &stream, const OpeningHours &value)
+inline std::ostream &operator<<(std::ostream &stream, const OpeningHours &value)
 {
     if (value.modifier == OpeningHours::is24_7)
         return stream << OpeningHours::is24_7;
@@ -243,61 +297,82 @@ struct opening_hours_grammar : qi::grammar<Iterator, Skipper, std::vector<Openin
         using qi::lit;
         using qi::char_;
         using qi::uint_;
-        using oh = osrm::extractor::OpeningHours;
+        using oh = osrm::util::OpeningHours;
+
+        // clang-format off
 
         // General syntax
         time_domain = rule_sequence[ph::push_back(_val, _1)] % any_rule_separator;
 
-        rule_sequence =
-            lit("24/7")[ph::bind(&oh::modifier, _val) = oh::is24_7] |
-            (selector_sequence[_val = _1] >> -rule_modifier[ph::bind(&oh::modifier, _val) = _1]) |
-            comment;
+        rule_sequence
+            = lit("24/7")[ph::bind(&oh::modifier, _val) = oh::is24_7]
+            | (selector_sequence[_val = _1] >> -rule_modifier[ph::bind(&oh::modifier, _val) = _1] >> -comment)
+            | comment
+            ;
 
         any_rule_separator = char_(";,") | lit("||");
 
         // Rule modifiers
-        rule_modifier.add("unknown", oh::unknown)("open", oh::open)("closed", oh::closed)("off",
-                                                                                          oh::off);
+        rule_modifier.add
+            ("unknown", oh::unknown)
+            ("open", oh::open)
+            ("closed", oh::closed)
+            ("off", oh::off)
+            ;
 
         // Selectors
         selector_sequence = (wide_range_selectors(_a) || small_range_selectors(_a))[_val = _a];
 
-        wide_range_selectors = year_selector(_r1) || monthday_selector(_r1) ||
-                               week_selector(_r1); // TODO week_selector -> ignored
+        wide_range_selectors
+            = (monthday_selector(_r1)
+               || year_selector(_r1)
+               || week_selector(_r1) // TODO week_selector
+              ) >> -lit(':');
 
         small_range_selectors = weekday_selector(_r1) || time_selector(_r1);
 
         // Time selector
         time_selector = (timespan % ',')[ph::bind(&OpeningHours::times, _r1) = _1];
 
-        timespan =
-            (time[_a = _1] >>
-             -('+' |
-               ('-' >> extended_time[_b = _1] >>
-                -('+' |
-                  '/' >> (minute |
-                          hour_minutes)))))[_val = ph::construct<OpeningHours::TimeSpan>(_a, _b)];
+        timespan
+            = (time[_a = _1]
+               >> -(lit('+')[_b = ph::construct<OpeningHours::Time>(24, 0)]
+                    | ('-' >> extended_time[_b = _1]
+                       >> -('+' | '/' >> (minute | hour_minutes))))
+               )[_val = ph::construct<OpeningHours::TimeSpan>(_a, _b)]
+            ;
 
         time = hour_minutes | variable_time;
 
         extended_time = extended_hour_minutes | variable_time;
 
-        variable_time = event[_val = ph::construct<OpeningHours::Time>(_1)] |
-                        ('(' >> event[_a = _1] >> plus_or_minus[_b = _1] >> hour_minutes[_c = _1] >>
-                         ')')[_val = ph::construct<OpeningHours::Time>(_a, _b, _c)];
+        variable_time
+            = event[_val = ph::construct<OpeningHours::Time>(_1)]
+            | ('(' >> event[_a = _1] >> plus_or_minus[_b = _1] >> hour_minutes[_c = _1] >> ')')
+            [_val = ph::construct<OpeningHours::Time>(_a, _b, _c)]
+            ;
 
-        event.add("dawn", OpeningHours::Time::dawn)("sunrise", OpeningHours::Time::sunrise)(
-            "sunset", OpeningHours::Time::sunset)("dusk", OpeningHours::Time::dusk);
+        event.add
+            ("dawn", OpeningHours::Time::dawn)
+            ("sunrise", OpeningHours::Time::sunrise)
+            ("sunset", OpeningHours::Time::sunset)
+            ("dusk", OpeningHours::Time::dusk)
+            ;
 
         // Weekday selector
-        weekday_selector = (holiday_sequence(_r1) >> -(char_(", ") >> weekday_sequence(_r1))) |
-                           (weekday_sequence(_r1) >> -(char_(", ") >> holiday_sequence(_r1)));
+        weekday_selector
+            = (holiday_sequence(_r1) >> -(char_(", ") >> weekday_sequence(_r1)))
+            | (weekday_sequence(_r1) >> -(char_(", ") >> holiday_sequence(_r1)))
+            ;
 
         weekday_sequence = (weekday_range % ',')[ph::bind(&OpeningHours::weekdays, _r1) = _1];
 
-        weekday_range = wday[ph::bind(&OpeningHours::WeekdayRange::from, _val) = _1] >>
-                        -(('-' >> wday[ph::bind(&OpeningHours::WeekdayRange::to, _val) = _1]) |
-                          ('[' >> (nth_entry % ',') >> ']' >> -day_offset));
+        weekday_range
+            = wday[_a = _1, _b = _1]
+            >> -(('-' >> wday[_b = _1])
+                 | ('[' >> (nth_entry % ',') >> ']' >> -day_offset))
+            [_val = ph::construct<OpeningHours::WeekdayRange>(_a, _b)]
+            ;
 
         holiday_sequence = (lit("SH") >> -day_offset) | lit("PH");
 
@@ -315,33 +390,38 @@ struct opening_hours_grammar : qi::grammar<Iterator, Skipper, std::vector<Openin
         // Month selector
         monthday_selector = (monthday_range % ',')[ph::bind(&OpeningHours::monthdays, _r1) = _1];
 
-        monthday_range =
-            (date_from[ph::bind(&OpeningHours::MonthdayRange::from, _val) = _1] >> -date_offset >>
-             '-' >> date_to[ph::bind(&OpeningHours::MonthdayRange::to, _val) = _1] >>
-             -date_offset) |
-            (date_from[ph::bind(&OpeningHours::MonthdayRange::from, _val) = _1] >>
-             -(date_offset >> -lit('+')));
+        monthday_range
+            = (date_from[ph::bind(&OpeningHours::MonthdayRange::from, _val) = _1]
+               >> -date_offset
+               >> '-'
+               >> date_to[ph::bind(&OpeningHours::MonthdayRange::to, _val) = _1]
+               >> -date_offset)
+            | (date_from[ph::bind(&OpeningHours::MonthdayRange::from, _val) = _1]
+               >> -(date_offset >> -lit('+')))
+            ;
 
         date_offset = (plus_or_minus >> wday) | day_offset;
 
-        date_from =
-            ((-year[_a = _1] >> (month[_b = _1] || (daynum[_c = _1] >> (&~lit(':') | eoi)))) |
-             variable_date)[_val = ph::construct<OpeningHours::Monthday>(_a, _b, _c)];
+        date_from
+            = ((-year[_a = _1] >> (month[_b = _1] || (daynum[_c = _1] >> (&~lit(':') | eoi))))
+               | variable_date)
+            [_val = ph::construct<OpeningHours::Monthday>(_a, _b, _c)]
+            ;
 
-        date_to =
-            date_from[_val = _1] | daynum[_val = ph::construct<OpeningHours::Monthday>(0, 0, _1)];
+        date_to
+            = date_from[_val = _1]
+            | daynum[_val = ph::construct<OpeningHours::Monthday>(0, 0, _1)]
+            ;
 
         variable_date = lit("easter");
 
         // Year selector
         year_selector = (year_range % ',')[ph::bind(&OpeningHours::monthdays, _r1) = _1];
 
-        year_range = year[ph::bind(&OpeningHours::MonthdayRange::from, _val) =
-                              ph::construct<OpeningHours::Monthday>(_1)] >>
-                     -(('-' >> year[ph::bind(&OpeningHours::MonthdayRange::to, _val) =
-                                        ph::construct<OpeningHours::Monthday>(_1)] >>
-                        -('/' >> uint_)) |
-                       '+');
+        year_range
+            = year[ph::bind(&OpeningHours::MonthdayRange::from, _val) = ph::construct<OpeningHours::Monthday>(_1)]
+            >> -(('-' >> year[ph::bind(&OpeningHours::MonthdayRange::to, _val) = ph::construct<OpeningHours::Monthday>(_1)]
+                  >> -('/' >> uint_)) | '+');
 
         // Basic elements
         plus_or_minus = lit('+')[_val = true] | lit('-')[_val = false];
@@ -358,20 +438,40 @@ struct opening_hours_grammar : qi::grammar<Iterator, Skipper, std::vector<Openin
         extended_hour_minutes = extended_hour[_a = _1] >> ':' >>
                                 minute[_val = ph::construct<OpeningHours::Time>(_a, _1)];
 
-        wday.add("Mo", 1)("Tu", 2)("We", 3)("Th", 4)("Fr", 5)("Sa", 6)("Su", 7);
+        wday.add
+            ("Su", 0)
+            ("Mo", 1)
+            ("Tu", 2)
+            ("We", 3)
+            ("Th", 4)
+            ("Fr", 5)
+            ("Sa", 6)
+            ;
 
-        daynum =
-            uint2_p[_pass = bind([](unsigned x) { return 01 <= x && x <= 31; }, _1), _val = _1];
+        daynum = uint2_p[_pass = bind([](unsigned x) { return 01 <= x && x <= 31; }, _1), _val = _1];
 
-        weeknum =
-            uint2_p[_pass = bind([](unsigned x) { return 01 <= x && x <= 53; }, _1), _val = _1];
+        weeknum = uint2_p[_pass = bind([](unsigned x) { return 01 <= x && x <= 53; }, _1), _val = _1];
 
-        month.add("Jan", 1)("Feb", 2)("Mar", 3)("Apr", 4)("May", 5)("Jun", 6)("Jul", 7)("Aug", 8)(
-            "Sep", 9)("Oct", 10)("Nov", 11)("Dec", 12);
+        month.add
+            ("Jan", 1)
+            ("Feb", 2)
+            ("Mar", 3)
+            ("Apr", 4)
+            ("May", 5)
+            ("Jun", 6)
+            ("Jul", 7)
+            ("Aug", 8)
+            ("Sep", 9)
+            ("Oct", 10)
+            ("Nov", 11)
+            ("Dec", 12)
+            ;
 
         year = uint4_p[_pass = bind([](unsigned x) { return x > 1900; }, _1), _val = _1];
 
         comment = lit('"') >> *(~qi::char_('"')) >> lit('"');
+
+        // clang-format on
 
         BOOST_SPIRIT_DEBUG_NODES((time_domain)(rule_sequence)(any_rule_separator)(
             selector_sequence)(wide_range_selectors)(small_range_selectors)(time_selector)(
@@ -415,7 +515,11 @@ struct opening_hours_grammar : qi::grammar<Iterator, Skipper, std::vector<Openin
     // Weekday rules
     qi::rule<Iterator, Skipper, void(OpeningHours &)> weekday_sequence, holiday_sequence;
 
-    qi::rule<Iterator, Skipper, OpeningHours::WeekdayRange(), qi::locals<unsigned>> weekday_range;
+    qi::rule<Iterator,
+             Skipper,
+             OpeningHours::WeekdayRange(),
+             qi::locals<unsigned char, unsigned char>>
+        weekday_range;
 
     // Monthday rules
     qi::rule<Iterator, Skipper, OpeningHours::MonthdayRange()> monthday_range;
@@ -440,7 +544,7 @@ struct opening_hours_grammar : qi::grammar<Iterator, Skipper, std::vector<Openin
 };
 }
 
-inline std::vector<OpeningHours> parseOpeningHours(const std::string &s)
+inline std::vector<OpeningHours> ParseOpeningHours(const std::string &s)
 {
     const detail::opening_hours_grammar<std::string::const_iterator> static grammar;
 
@@ -449,6 +553,7 @@ inline std::vector<OpeningHours> parseOpeningHours(const std::string &s)
     bool ok =
         boost::spirit::qi::phrase_parse(iter, s.end(), grammar, boost::spirit::qi::blank, result);
 
+    // TODO: remove debug
     if (!ok || iter != s.end())
         std::cout << "failed at " << std::string(iter, s.end()) << "\n";
     else
@@ -457,15 +562,30 @@ inline std::vector<OpeningHours> parseOpeningHours(const std::string &s)
     for (auto x : result)
         std::cout << "    " << x << "\n";
 
-    return ok && iter == s.end();
+    if (!ok || iter != s.end())
+        return std::vector<OpeningHours>();
+
+    return result;
 }
 
-inline bool checkOpeningHours(const std::vector<OpeningHours>& input)
+inline bool CheckOpeningHours(const std::vector<OpeningHours> &input, const struct tm &time)
 {
-    return true;
+    bool is_open = false;
+    for (auto &opening_hours : input)
+    {
+        if (opening_hours.modifier == OpeningHours::is24_7)
+            return true;
+
+        if (opening_hours.IsInRange(time))
+        {
+            is_open = opening_hours.modifier == OpeningHours::open;
+        }
+    }
+
+    return is_open;
 }
 
-} // extractor
+} // util
 } // osrm
 
 #endif // OPENING_HOURS_HPP
