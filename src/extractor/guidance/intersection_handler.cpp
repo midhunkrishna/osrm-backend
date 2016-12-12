@@ -40,7 +40,7 @@ IntersectionHandler::IntersectionHandler(const util::NodeBasedDynamicGraph &node
 
 bool IntersectionHandler::SuppressModeNavigation(const EdgeID &via_edge,
                                                  const EdgeID &connected,
-                                                 const std::array<TravelMode, 2> &SUPPRESS_MODE_LIST) const
+                                                 const SuppressModeListT &SUPPRESS_MODE_LIST) const
 {
     const auto in_mode = node_based_graph.GetEdgeData(via_edge).travel_mode;
     const auto out_mode = node_based_graph.GetEdgeData(connected).travel_mode;
@@ -49,14 +49,14 @@ bool IntersectionHandler::SuppressModeNavigation(const EdgeID &via_edge,
 
 bool IntersectionHandler::SuppressModeNavigation(const TravelMode &in_mode,
                                                  const TravelMode &out_mode,
-                                                 const std::array<TravelMode, 2> &SUPPRESS_MODE_LIST) const
+                                                 const SuppressModeListT &SUPPRESS_MODE_LIST) const
 {
     const auto suppress_in_mode = std::find(begin(SUPPRESS_MODE_LIST), end(SUPPRESS_MODE_LIST), in_mode);
     if (suppress_in_mode != end(SUPPRESS_MODE_LIST))
     {
         return in_mode == out_mode;
     }
-    return true;
+    return false;
 }
 
 TurnType::Enum IntersectionHandler::findBasicTurnType(const EdgeID via_edge,

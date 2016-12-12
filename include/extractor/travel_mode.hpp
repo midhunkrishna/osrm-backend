@@ -38,6 +38,7 @@ namespace extractor
 // This is a char instead of a typed enum, so that we can
 // pack it into e.g. a "TravelMode mode : 4" packed bitfield
 using TravelMode = unsigned char;
+using SuppressModeListT = std::array<osrm::extractor::TravelMode, 2>;
 }
 }
 
@@ -56,6 +57,6 @@ const constexpr osrm::extractor::TravelMode TRAVEL_MODE_RIVER_DOWN = 11;
 const constexpr osrm::extractor::TravelMode TRAVEL_MODE_ROUTE = 12;
 
 // travel modes for which navigation should be suppressed
-const std::array<osrm::extractor::TravelMode, 2> constexpr SUPPRESS_MODE_LIST = {{TRAVEL_MODE_TRAIN, TRAVEL_MODE_FERRY}};
+const osrm::extractor::SuppressModeListT constexpr SUPPRESS_MODE_LIST = {{TRAVEL_MODE_TRAIN, TRAVEL_MODE_FERRY}};
 
 #endif /* TRAVEL_MODE_HPP */
