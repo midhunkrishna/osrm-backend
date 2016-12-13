@@ -1,6 +1,6 @@
-#include "extractor/guidance/turn_analysis.hpp"
 #include "extractor/guidance/constants.hpp"
 #include "extractor/guidance/road_classification.hpp"
+#include "extractor/guidance/turn_analysis.hpp"
 
 #include "util/coordinate.hpp"
 #include "util/coordinate_calculation.hpp"
@@ -65,7 +65,12 @@ TurnAnalysis::TurnAnalysis(const util::NodeBasedDynamicGraph &node_based_graph,
                        node_based_graph,
                        node_info_list,
                        name_table,
-                       street_name_suffix_table)
+                       street_name_suffix_table),
+      suppress_mode_handler(intersection_generator,
+                            node_based_graph,
+                            node_info_list,
+                            name_table,
+                            street_name_suffix_table)
 {
 }
 
@@ -142,6 +147,13 @@ Intersection TurnAnalysis::AssignTurnTypes(const NodeID node_prior_to_intersecti
             if (road.instruction.type == TurnType::OnRamp)
                 road.instruction.type = TurnType::OffRamp;
         });
+    }
+    // Suppress turns on ways between mode types that do not need guidance
+    if (suppress_mode_handler.canProcess(
+            node_prior_to_intersection, entering_via_edge, intersection))
+    {
+        intersection = suppress_mode_handler(
+            node_prior_to_intersection, entering_via_edge, std::move(intersection));
     }
     return intersection;
 }

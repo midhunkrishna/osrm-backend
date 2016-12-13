@@ -38,27 +38,6 @@ IntersectionHandler::IntersectionHandler(const util::NodeBasedDynamicGraph &node
 {
 }
 
-// checks if navigation should be suppressed based on the given modes and global SUPPRESS_MODE_LIST
-// Certain modes do not need navigation, most likely because the user will not have control over the routing
-bool IntersectionHandler::SuppressModeNavigation(const EdgeID &in_edge,
-                                                 const EdgeID &out_edge) const
-{
-    const auto in_mode = node_based_graph.GetEdgeData(in_edge).travel_mode;
-    const auto out_mode = node_based_graph.GetEdgeData(out_edge).travel_mode;
-    return IntersectionHandler::SuppressModeNavigation(in_mode, out_mode);
-}
-
-bool IntersectionHandler::SuppressModeNavigation(const TravelMode &in_mode,
-                                                 const TravelMode &out_mode) const
-{
-    const auto suppress_in_mode = std::find(begin(SUPPRESS_MODE_LIST), end(SUPPRESS_MODE_LIST), in_mode);
-    if (suppress_in_mode != end(SUPPRESS_MODE_LIST))
-    {
-        return in_mode == out_mode;
-    }
-    return false;
-}
-
 TurnType::Enum IntersectionHandler::findBasicTurnType(const EdgeID via_edge,
                                                       const ConnectedRoad &road) const
 {
@@ -68,10 +47,6 @@ TurnType::Enum IntersectionHandler::findBasicTurnType(const EdgeID via_edge,
 
     const auto in_mode = node_based_graph.GetEdgeData(via_edge).travel_mode;
     const auto out_mode = node_based_graph.GetEdgeData(road.eid).travel_mode;
-    if (SuppressModeNavigation(in_mode, out_mode))
-    {
-        return TurnType::NoTurn;
-    }
 
     bool on_ramp = in_data.road_classification.IsRampClass();
 
@@ -100,10 +75,6 @@ TurnInstruction IntersectionHandler::getInstructionForObvious(const std::size_t 
     // handle travel modes:
     const auto in_mode = node_based_graph.GetEdgeData(via_edge).travel_mode;
     const auto out_mode = node_based_graph.GetEdgeData(road.eid).travel_mode;
-    if (SuppressModeNavigation(in_mode, out_mode))
-    {
-        return {TurnType::NoTurn, getTurnDirection(road.angle)};
-    }
     if (type == TurnType::OnRamp)
     {
         return {TurnType::OnRamp, getTurnDirection(road.angle)};
@@ -297,12 +268,6 @@ void IntersectionHandler::assignFork(const EdgeID via_edge,
         else
             right.instruction = {TurnType::Fork, DirectionModifier::SlightRight};
     }
-
-    if (SuppressModeNavigation(via_edge, left.eid) && SuppressModeNavigation(via_edge, right.eid))
-    {
-        left.instruction = {TurnType::Suppressed, getTurnDirection(left.angle)};
-        right.instruction = {TurnType::Suppressed, getTurnDirection(right.angle)};
-    }
 }
 
 void IntersectionHandler::assignFork(const EdgeID via_edge,
@@ -365,10 +330,6 @@ void IntersectionHandler::assignTrivialTurns(const EdgeID via_eid,
     for (std::size_t index = begin; index != end; ++index)
         if (intersection[index].entry_allowed)
         {
-            if (SuppressModeNavigation(via_eid, intersection[index].eid))
-            {
-                intersection[index].instruction = {TurnType::NoTurn, getTurnDirection(intersection[index].angle)};
-            }
             intersection[index].instruction = {findBasicTurnType(via_eid, intersection[index]),
                                                getTurnDirection(intersection[index].angle)};
         }

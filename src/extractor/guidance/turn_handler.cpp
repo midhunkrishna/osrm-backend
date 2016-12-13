@@ -152,14 +152,6 @@ Intersection TurnHandler::handleThreeWayTurn(const EdgeID via_edge, Intersection
                OOOOOOO
      */
 
-    if (SuppressModeNavigation(intersection[0].eid, intersection[1].eid),
-        SuppressModeNavigation(intersection[0].eid, intersection[2].eid))
-    {
-        intersection[1].instruction = {TurnType::NoTurn, getTurnDirection(intersection[1].angle)};
-        intersection[2].instruction = {TurnType::NoTurn, getTurnDirection(intersection[2].angle)};
-        return intersection;
-    }
-
     const auto fork_range = findFork(via_edge, intersection);
     if (fork_range.first == 1 && fork_range.second == 2 && obvious_index == 0)
         assignFork(via_edge, intersection[2], intersection[1]);

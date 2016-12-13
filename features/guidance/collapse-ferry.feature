@@ -29,8 +29,8 @@ Feature: Collapse
             | ef    | primary |       | land |
 
         When I route I should get
-            | waypoints | route              | turns                                      | modes                         |
-            | f,j       | land,sea,land,land | depart,notification right,turn left,arrive | driving,ferry,driving,driving |
+            | waypoints | route              | turns                                             | modes                         |
+            | f,j       | land,sea,land,land | depart,notification right,end of road left,arrive | driving,ferry,driving,driving |
 
     Scenario: Switching Ferry in a Harbour
         Given the node map
@@ -57,7 +57,7 @@ Feature: Collapse
             | bc    | primary | ferry | pennydog-island-ferry |
 
         When I route I should get
-            | waypoints | route                                                                           | turns                                                                | modes                               |
+            | waypoints | route                                                                                 | turns                                                                | modes                               |
             | e,f       | melee-island,melee-island-ferry,pennydog-island-ferry,pennydog-island,pennydog-island | depart,notification straight,turn right,notification straight,arrive | driving,ferry,ferry,driving,driving |
 
     Scenario: End of Road Ferries
@@ -115,5 +115,5 @@ Feature: Collapse
             | fc    |         | ferry | ferry       |
 
         When I route I should get
-            | waypoints | route                                   | turns                                                     |
+            | waypoints | route                                   | turns                                                  |
             | g,e       | land-bottom,ferry,land-right,land-right | depart,notification straight,notification right,arrive |
