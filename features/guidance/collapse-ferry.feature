@@ -88,3 +88,31 @@ Feature: Collapse
         When I route I should get
             | waypoints | route                                                                           | turns                                                                | modes                               |
             | e,f       | melee-island,melee-island-ferry,pennydog-island-ferry,pennydog-island,pennydog-island | depart,notification straight,turn right,notification straight,arrive | driving,ferry,ferry,driving,driving |
+
+    Scenario: End of Road Ferries
+        Given the node map
+            """
+            a - b ~ ~ ~ ~ c ~ ~ ~ ~ ~ d - e
+                          ~
+                          ~
+                          ~
+                          ~
+                          ~
+                          ~
+                          ~
+                          f
+                          |
+                          g
+            """
+
+        And the ways
+            | nodes | highway | route | name        |
+            | ab    | primary |       | land-left   |
+            | de    | primary |       | land-right  |
+            | gf    | primary |       | land-bottom |
+            | bcd   |         | ferry | ferry       |
+            | fc    |         | ferry | ferry       |
+
+        When I route I should get
+            | waypoints | route                                   | turns                                                     |
+            | g,e       | land-bottom,ferry,land-right,land-right | depart,notification-straight,notification-straight,arrive |
