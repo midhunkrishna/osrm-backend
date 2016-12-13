@@ -8,14 +8,15 @@ Feature: Collapse
     Scenario: Collapse Steps While On Ferry
         Given the node map
             """
-            j    a   c   b    k
-
-
-                        d
-
-
-                                    f
-                                e
+            j----a---c---b----k
+                  ~   ~  ~
+                    ~  ~ ~
+                       ~~~
+                         d
+                          ~
+                           ~
+                            ~
+                             e --- f
             """
 
         And the ways
@@ -25,36 +26,6 @@ Feature: Collapse
             | bd    |         | ferry | sea  |
             | cd    |         | ferry | sea  |
             | de    |         | ferry | sea  |
-            | ef    | primary |       | land |
-
-        When I route I should get
-            | waypoints | route              | turns                                      | modes                         |
-            | f,j       | land,sea,land,land | depart,notification right,turn left,arrive | driving,ferry,driving,driving |
-
-    Scenario: Collapse Steps While On Ferry
-        Given the node map
-            """
-            j    a   c   b    k
-
-
-                        d
-
-
-                        g
-
-
-                                    f
-                                e
-            """
-
-        And the ways
-            | nodes | highway | route | name |
-            | jacbk | primary |       | land |
-            | ad    |         | ferry | sea  |
-            | bd    |         | ferry | sea  |
-            | cd    |         | ferry | sea  |
-            | dg    |         | ferry | sea  |
-            | ge    |         | ferry | sea  |
             | ef    | primary |       | land |
 
         When I route I should get
@@ -115,4 +86,34 @@ Feature: Collapse
 
         When I route I should get
             | waypoints | route                                   | turns                                                     |
-            | g,e       | land-bottom,ferry,land-right,land-right | depart,notification-straight,notification-straight,arrive |
+            | g,e       | land-bottom,ferry,land-right,land-right | depart,notification straight,notification straight,arrive |
+
+    Scenario: Fork Ferries
+        Given the node map
+            """
+            a - b         d - e
+                 ~       ~
+                  ~     ~
+                   ~   ~
+                    ~ ~
+                     c
+                     ~
+                     ~
+                     ~
+                     f
+                     |
+                     g
+            """
+
+        And the ways
+            | nodes | highway | route | name        |
+            | ab    | primary |       | land-left   |
+            | de    | primary |       | land-right  |
+            | gf    | primary |       | land-bottom |
+            | cb    |         | ferry | ferry       |
+            | cd    |         | ferry | ferry       |
+            | fc    |         | ferry | ferry       |
+
+        When I route I should get
+            | waypoints | route                                   | turns                                                     |
+            | g,e       | land-bottom,ferry,land-right,land-right | depart,notification straight,notification right,arrive |

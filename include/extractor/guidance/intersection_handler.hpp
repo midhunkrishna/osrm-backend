@@ -59,12 +59,10 @@ class IntersectionHandler
 
     // Decide whether or not navigation should be suppressed on an edge based on mode type
     bool SuppressModeNavigation(const TravelMode &in_mode,
-                                const TravelMode &out_mode,
-                                const SuppressModeListT &SUPPRESS_MODE_LIST) const;
+                                const TravelMode &out_mode) const;
 
-    bool SuppressModeNavigation(const EdgeID &via_edge,
-                                const EdgeID &connected,
-                                const SuppressModeListT &SUPPRESS_MODE_LIST) const;
+    bool SuppressModeNavigation(const EdgeID &in_edge,
+                                const EdgeID &out_edge) const;
 
     // Decide on a basic turn types
     TurnType::Enum findBasicTurnType(const EdgeID via_edge, const ConnectedRoad &candidate) const;
