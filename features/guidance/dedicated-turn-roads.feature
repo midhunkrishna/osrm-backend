@@ -9,13 +9,13 @@ Feature: Slipways and Dedicated Turn Lanes
         Given the node map
             """
                     e
-            a b . . c d
-                 `h .
-                   `
-                  1 `
-                    .
-                    f
-                    .
+            a b-----c d
+               `--h |
+                   ||
+                  1||
+                   ||
+                   `f
+                    |
                     g
             """
 
@@ -71,13 +71,13 @@ Feature: Slipways and Dedicated Turn Lanes
     Scenario: Turn Instead of Ramp
         Given the node map
             """
-                    e---.
-            a-b----]c[d |
-               `--h     |
-                   \    /
-                    |  /
-                    | /
-                    |/
+                    e
+            a-b----]c[-d
+               `--h |
+                   \|
+                    |
+                    |
+                    |
                     |
                     |
                     |
@@ -100,12 +100,12 @@ Feature: Slipways and Dedicated Turn Lanes
     Scenario: Turn Instead of Ramp
         Given the node map
             """
-                    e---.
-            a-b----]c[d |
-               `--h     |
-                   \   /
-                    | /
-                    |/
+                    e
+            a-b----]c[d
+               `--h |
+                   \|
+                    |
+                    |
                     f
                     |
                     |
@@ -125,15 +125,15 @@ Feature: Slipways and Dedicated Turn Lanes
     Scenario: Inner city expressway with on road
         Given the node map
             """
-            a b . . . c g
-                   `f .
-                     `
-                      .
-                      .
+            a b-------c g
+                 `--f |
+                     \|
+                      |
+                      |
                       d
-                      .
-                      .
-                      .
+                      |
+                      |
+                      |
                       e
             """
 
