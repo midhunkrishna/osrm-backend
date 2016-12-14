@@ -25,11 +25,16 @@ SuppressModeHandler::SuppressModeHandler(const IntersectionGenerator &intersecti
 {
 }
 
+// travel modes for which navigation should be suppressed
+const SuppressModeHandler::SuppressModeListT constexpr SUPPRESS_MODE_LIST = {
+    {TRAVEL_MODE_TRAIN, TRAVEL_MODE_FERRY}};
+
 bool SuppressModeHandler::canProcess(const NodeID /*nid*/,
                                      const EdgeID via_eid,
-                                     const Intersection &intersection) const
+                                     const Intersection & /*intersection*/) const
 {
-    // if the approach way is not on the suppression blacklist, there's no ways to suppress by this criteria
+    // if the approach way is not on the suppression blacklist, there are no ways to suppress by
+    // this criteria
     const auto in_mode = node_based_graph.GetEdgeData(via_eid).travel_mode;
     const auto suppress_in_mode =
         std::find(begin(SUPPRESS_MODE_LIST), end(SUPPRESS_MODE_LIST), in_mode);
@@ -37,16 +42,18 @@ bool SuppressModeHandler::canProcess(const NodeID /*nid*/,
 }
 
 Intersection SuppressModeHandler::
-operator()(const NodeID /*nid*/, const EdgeID source_edge_id, Intersection intersection) const
+operator()(const NodeID /*nid*/, const EdgeID via_eid, Intersection intersection) const
 {
-    const auto in_mode = node_based_graph.GetEdgeData(intersection[0].eid).travel_mode;
-    BOOST_ASSERT(std::find(begin(SUPPRESS_MODE_LIST), end(SUPPRESS_MODE_LIST), in_mode) != SUPPRESS_MODE_LIST.end());
+    const auto in_mode = node_based_graph.GetEdgeData(via_eid).travel_mode;
+    BOOST_ASSERT(std::find(begin(SUPPRESS_MODE_LIST), end(SUPPRESS_MODE_LIST), in_mode) !=
+                 SUPPRESS_MODE_LIST.end());
 
     // if all out ways share the same mode as the approach way, suppress all the turns
-    const auto all_share_mode =
-        std::all_of(begin(intersection) + 1, end(intersection), [this, &in_mode](ConnectedRoad way) {
-            return node_based_graph.GetEdgeData(way.eid).travel_mode == in_mode;
-        });
+    auto Begin = begin(intersection) + 1;
+    auto End = end(intersection);
+    const auto all_share_mode = std::all_of(Begin, End, [this, &in_mode](const ConnectedRoad &way) {
+        return node_based_graph.GetEdgeData(way.eid).travel_mode == in_mode;
+    });
 
     if (all_share_mode)
     {

@@ -15,7 +15,7 @@ namespace extractor
 namespace guidance
 {
 
-class SuppressModeHandler : public IntersectionHandler
+class SuppressModeHandler final : public IntersectionHandler
 {
   public:
     SuppressModeHandler(const IntersectionGenerator &intersection_generator,
@@ -30,9 +30,11 @@ class SuppressModeHandler : public IntersectionHandler
                     const EdgeID via_eid,
                     const Intersection &intersection) const override final;
 
-    Intersection operator()(const NodeID nid,
+    Intersection operator()(const NodeID /*nid*/,
                             const EdgeID via_eid,
                             Intersection intersection) const override final;
+
+    using SuppressModeListT = std::array<osrm::extractor::TravelMode, 2>;
 };
 
 } // namespace osrm

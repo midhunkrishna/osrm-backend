@@ -45,9 +45,6 @@ TurnType::Enum IntersectionHandler::findBasicTurnType(const EdgeID via_edge,
     const auto &in_data = node_based_graph.GetEdgeData(via_edge);
     const auto &out_data = node_based_graph.GetEdgeData(road.eid);
 
-    const auto in_mode = node_based_graph.GetEdgeData(via_edge).travel_mode;
-    const auto out_mode = node_based_graph.GetEdgeData(road.eid).travel_mode;
-
     bool on_ramp = in_data.road_classification.IsRampClass();
 
     bool onto_ramp = out_data.road_classification.IsRampClass();
