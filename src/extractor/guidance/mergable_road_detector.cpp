@@ -14,6 +14,7 @@ namespace guidance
 
 namespace
 {
+const auto ASSUMED_LANE_WIDTH = 3.25;
 
 // check a connected road for equality of a name
 inline auto makeCheckRoadForName(const NameID name_id,
@@ -40,7 +41,7 @@ bool MergableRoadDetector::CanMergeRoad(const NodeID intersection_node,
                                         const IntersectionShapeData &rhs) const
 {
     // roads should be somewhat close
-    if (angularDeviation(lhs.bearing, rhs.bearing) > 80)
+    if (angularDeviation(lhs.bearing, rhs.bearing) > 95)
         return false;
 
     const auto &lhs_edge_data = node_based_graph.GetEdgeData(lhs.eid);
@@ -67,26 +68,24 @@ bool MergableRoadDetector::CanMergeRoad(const NodeID intersection_node,
     if (road_target(lhs) == intersection_node || road_target(lhs) == intersection_node)
         return false;
 
-    std::cout << "Base Checks passed" << std::endl;
+    // Don't merge turning circles/traffic loops
+    if (IsTrafficLoop(intersection_node, lhs) || IsTrafficLoop(intersection_node, rhs))
+        return false;
+
+    // needs to be checked prior to link roads, since connections can seem like links
+    if (ConnectAgain(intersection_node, lhs, rhs))
+        return true;
+
     // Don't merge link roads
     if (IsLinkRoad(intersection_node, lhs) || IsLinkRoad(intersection_node, rhs))
         return false;
 
-    std::cout << "Not Links roads" << std::endl;
-    if (ConnectAgain(intersection_node, lhs, rhs))
-        return true;
-
-    std::cout << "Don't Connect" << std::endl;
+    // check if we simply split up prior to an intersection
     if (IsNarrowTriangle(intersection_node, lhs, rhs))
         return true;
 
-    std::cout << "No Triangle" << std::endl;
-    if (HaveSameDirection(intersection_node, lhs, rhs))
-        return true;
-
-    std::cout << "Not same direction" << std::endl;
-    return false;
-    // finally check if two roads describe the same way
+    // finally check if two roads describe the direction
+    return HaveSameDirection(intersection_node, lhs, rhs);
 }
 
 bool MergableRoadDetector::RoadDataIsCompatible(const util::NodeBasedEdgeData &lhs_edge_data,
@@ -110,6 +109,13 @@ bool MergableRoadDetector::RoadDataIsCompatible(const util::NodeBasedEdgeData &l
     return lhs_edge_data.road_classification == rhs_edge_data.road_classification;
 }
 
+bool MergableRoadDetector::IsTrafficLoop(const NodeID intersection_node,
+                                         const MergableRoadData &road) const
+{
+    const auto connection = intersection_generator.SkipDegreeTwoNodes(intersection_node, road.eid);
+    return intersection_node == node_based_graph.GetTarget(connection.via_eid);
+}
+
 bool MergableRoadDetector::IsNarrowTriangle(const NodeID intersection_node,
                                             const MergableRoadData &lhs,
                                             const MergableRoadData &rhs) const
@@ -121,7 +127,7 @@ bool MergableRoadDetector::IsNarrowTriangle(const NodeID intersection_node,
     // Standard following the straightmost road
     // Since both items have the same id, we can `select` based on any setup
     SelectStraightmostRoadByNameAndOnlyChoice selector(
-        node_based_graph.GetEdgeData(lhs.eid).name_id, false);
+        node_based_graph.GetEdgeData(lhs.eid).name_id, lhs.bearing, false);
 
     NodeBasedGraphWalker graph_walker(node_based_graph, intersection_generator);
     graph_walker.TraverseRoad(intersection_node, lhs.eid, left_accumulator, selector);
@@ -135,6 +141,14 @@ bool MergableRoadDetector::IsNarrowTriangle(const NodeID intersection_node,
                                   left_accumulator,
                                   selector);
     }
+    const auto distance_to_triangle = util::coordinate_calculation::haversineDistance(
+        node_coordinates[intersection_node],
+        node_coordinates[node_based_graph.GetTarget(left_accumulator.via_edge_id)]);
+
+    // don't move to far down the road
+    if (distance_to_triangle > 80)
+        return false;
+
     graph_walker.TraverseRoad(intersection_node, rhs.eid, right_accumulator, selector);
     if (angularDeviation(right_accumulator.intersection.findClosestTurn(270)->angle, 270) >
         NARROW_TURN_ANGLE)
@@ -161,8 +175,7 @@ bool MergableRoadDetector::IsNarrowTriangle(const NodeID intersection_node,
     //        a
     //
     // e.g. here when looking at `a,b`, a narrow triangle should offer a turn to the right, when
-    // we
-    // want to connect to c
+    // we want to connect to c
     if (angularDeviation(connector_turn->angle, 90) > NARROW_TURN_ANGLE)
         return false;
 
@@ -172,11 +185,11 @@ bool MergableRoadDetector::IsNarrowTriangle(const NodeID intersection_node,
     };
 
     // the width we can bridge at the intersection
-    const auto assumed_lane_width = (num_lanes(lhs) + num_lanes(rhs)) * 3.25;
-    if (util::coordinate_calculation::haversineDistance(
-            node_coordinates[node_based_graph.GetTarget(left_accumulator.via_edge_id)],
-            node_coordinates[node_based_graph.GetTarget(right_accumulator.via_edge_id)]) >
-        (assumed_lane_width + 8))
+    const auto assumed_road_width = (num_lanes(lhs) + num_lanes(rhs)) * ASSUMED_LANE_WIDTH;
+    const auto distance_between_triangle_corners = util::coordinate_calculation::haversineDistance(
+        node_coordinates[node_based_graph.GetTarget(left_accumulator.via_edge_id)],
+        node_coordinates[node_based_graph.GetTarget(right_accumulator.via_edge_id)]);
+    if (distance_between_triangle_corners > (assumed_road_width + 10))
         return false;
 
     // check if both intersections are connected
@@ -194,7 +207,7 @@ bool MergableRoadDetector::HaveSameDirection(const NodeID intersection_node,
                                              const MergableRoadData &lhs,
                                              const MergableRoadData &rhs) const
 {
-    if (angularDeviation(lhs.bearing, rhs.bearing) > 90)
+    if (angularDeviation(lhs.bearing, rhs.bearing) > 95)
         return false;
 
     // Find a coordinate following a road that is far away
@@ -203,7 +216,7 @@ bool MergableRoadDetector::HaveSameDirection(const NodeID intersection_node,
         LengthLimitedCoordinateAccumulator accumulator(
             coordinate_extractor, node_based_graph, max_length);
         SelectStraightmostRoadByNameAndOnlyChoice selector(
-            node_based_graph.GetEdgeData(edge_id).name_id, false);
+            node_based_graph.GetEdgeData(edge_id).name_id, lhs.bearing, false);
         graph_walker.TraverseRoad(intersection_node, edge_id, accumulator, selector);
 
         return std::make_pair(accumulator.accumulated_length, accumulator.coordinates);
@@ -221,33 +234,46 @@ bool MergableRoadDetector::HaveSameDirection(const NodeID intersection_node,
     if (distance_traversed_to_the_left <= 40)
         return false;
 
-    coordinates_to_the_left = coordinate_extractor.SampleCoordinates(
-        std::move(coordinates_to_the_left), distance_to_extract, 5);
-
     std::tie(distance_traversed_to_the_right, coordinates_to_the_right) =
         getCoordinatesAlongWay(rhs.eid, distance_to_extract);
+
     if (distance_traversed_to_the_right <= 40)
         return false;
+
+    coordinates_to_the_left = coordinate_extractor.SampleCoordinates(
+        std::move(coordinates_to_the_left), distance_to_extract, 5);
 
     coordinates_to_the_right = coordinate_extractor.SampleCoordinates(
         std::move(coordinates_to_the_right), distance_to_extract, 5);
 
     // extract the number of lanes for a road
-    const auto pruning_count = [this](const MergableRoadData &road) {
-        const auto num_lanes = std::max<std::uint8_t>(
-            node_based_graph.GetEdgeData(road.eid).road_classification.GetNumberOfLanes(), 1);
-        const auto coordinates_to_remove = std::min(3, static_cast<int>(3.25 * num_lanes / 5));
-        return coordinates_to_remove;
+    // restricts a vector to the last two thirds of the length
+    const auto prune = [](auto &data_vector) {
+        BOOST_ASSERT(data_vector.size() >= 3);
+        data_vector.erase(data_vector.begin(), data_vector.begin() + data_vector.size() / 3);
     };
 
-    coordinates_to_the_left.erase(coordinates_to_the_left.begin(),
-                                  coordinates_to_the_left.begin() + pruning_count(lhs));
-    coordinates_to_the_right.erase(coordinates_to_the_right.begin(),
-                                   coordinates_to_the_right.begin() + pruning_count(rhs));
+    prune(coordinates_to_the_left);
+    prune(coordinates_to_the_right);
 
     const auto are_parallel = util::coordinate_calculation::areParallel(coordinates_to_the_left,
                                                                         coordinates_to_the_right);
-    return are_parallel;
+
+    if (!are_parallel)
+        return false;
+
+    // compare reference distance:
+    const auto distance_between_roads = util::coordinate_calculation::findClosestDistance(
+        coordinates_to_the_left[coordinates_to_the_left.size() / 2], coordinates_to_the_right);
+
+    const auto combined_road_width =
+        0.5 *
+        (std::max<int>(
+             1, node_based_graph.GetEdgeData(lhs.eid).road_classification.GetNumberOfLanes()) +
+         std::max<int>(
+             1, node_based_graph.GetEdgeData(rhs.eid).road_classification.GetNumberOfLanes())) *
+        ASSUMED_LANE_WIDTH;
+    return distance_between_roads <= combined_road_width + 8;
 }
 
 bool MergableRoadDetector::ConnectAgain(const NodeID intersection_node,
@@ -261,8 +287,8 @@ bool MergableRoadDetector::ConnectAgain(const NodeID intersection_node,
     const auto right_connection =
         intersection_generator.SkipDegreeTwoNodes(intersection_node, rhs.eid);
 
-    const auto left_candidate = node_based_graph.GetTarget(left_connection.second);
-    const auto right_candidate = node_based_graph.GetTarget(right_connection.second);
+    const auto left_candidate = node_based_graph.GetTarget(left_connection.via_eid);
+    const auto right_candidate = node_based_graph.GetTarget(right_connection.via_eid);
 
     const auto candidate_is_valid =
         left_candidate == right_candidate && left_candidate != intersection_node;
@@ -286,8 +312,13 @@ bool MergableRoadDetector::ConnectAgain(const NodeID intersection_node,
                    });
     };
 
-    if (all_same_name_and_degree_three(intersection_node) ||
-        all_same_name_and_degree_three(left_candidate))
+    const auto degree_three_connect_in = all_same_name_and_degree_three(intersection_node);
+    const auto degree_three_connect_out = all_same_name_and_degree_three(left_candidate);
+
+    if (!degree_three_connect_in && !degree_three_connect_out)
+        return false;
+
+    if (degree_three_connect_in && degree_three_connect_out)
         return true;
 
     const auto distance_between_candidates = util::coordinate_calculation::haversineDistance(
@@ -302,7 +333,7 @@ bool MergableRoadDetector::IsLinkRoad(const NodeID intersection_node,
     const auto next_intersection_parameters =
         intersection_generator.SkipDegreeTwoNodes(intersection_node, road.eid);
     const auto next_intersection_along_road = intersection_generator.GetConnectedRoads(
-        next_intersection_parameters.first, next_intersection_parameters.second);
+        next_intersection_parameters.nid, next_intersection_parameters.via_eid);
     const auto extract_name = [this](const MergableRoadData &road) {
         return node_based_graph.GetEdgeData(road.eid).name_id;
     };
@@ -320,7 +351,14 @@ bool MergableRoadDetector::IsLinkRoad(const NodeID intersection_node,
 
     // we cannot be looking at the same road we came from
     if (node_based_graph.GetTarget(opposite_of_next_road_along_path->eid) ==
-        next_intersection_parameters.first)
+        next_intersection_parameters.nid)
+        return false;
+
+    // check if the opposite of the next road decision was sane. It could have been just as well our
+    // incoming road.
+    if (angularDeviation(angularDeviation(next_road_along_path->angle, 180),
+                         angularDeviation(opposite_of_next_road_along_path->angle, 0)) <
+        FUZZY_ANGLE_DIFFERENCE)
         return false;
 
     // near straight road that continues
