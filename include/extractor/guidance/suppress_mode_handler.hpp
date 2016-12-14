@@ -30,7 +30,7 @@ class SuppressModeHandler final : public IntersectionHandler
                     const EdgeID via_eid,
                     const Intersection &intersection) const override final;
 
-    Intersection operator()(const NodeID /*nid*/,
+    Intersection operator()(const NodeID nid,
                             const EdgeID via_eid,
                             Intersection intersection) const override final;
 
