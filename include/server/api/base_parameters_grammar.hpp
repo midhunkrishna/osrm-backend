@@ -141,11 +141,18 @@ struct BaseParametersGrammar : boost::spirit::qi::grammar<Iterator, Signature>
                          add_hint, qi::_r1, qi::_1)] %
                          ';';
 
+        emit_hints_rule =
+            qi::lit("emit_hints=") >
+            qi::bool_[ph::bind(&engine::api::BaseParameters::emit_hints, qi::_r1) = qi::_1];
+
         bearings_rule =
             qi::lit("bearings=") >
             (-(qi::short_ > ',' > qi::short_))[ph::bind(add_bearing, qi::_r1, qi::_1)] % ';';
 
-        base_rule = radiuses_rule(qi::_r1) | hints_rule(qi::_r1) | bearings_rule(qi::_r1);
+        base_rule = radiuses_rule(qi::_r1)   //
+                    | hints_rule(qi::_r1)    //
+                    | bearings_rule(qi::_r1) //
+                    | emit_hints_rule(qi::_r1);
     }
 
   protected:
@@ -156,6 +163,8 @@ struct BaseParametersGrammar : boost::spirit::qi::grammar<Iterator, Signature>
     qi::rule<Iterator, Signature> bearings_rule;
     qi::rule<Iterator, Signature> radiuses_rule;
     qi::rule<Iterator, Signature> hints_rule;
+
+    qi::rule<Iterator, Signature> emit_hints_rule;
 
     qi::rule<Iterator, osrm::engine::Bearing()> bearing_rule;
     qi::rule<Iterator, osrm::util::Coordinate()> location_rule;
