@@ -305,11 +305,19 @@ bool MergableRoadDetector::ConnectAgain(const NodeID intersection_node,
         // check if all items share a name
         const auto range = node_based_graph.GetAdjacentEdgeRange(nid);
         const auto required_name_id = node_based_graph.GetEdgeData(range.front()).name_id;
-        return range.end() !=
-               std::find_if(
-                   range.begin(), range.end(), [this, required_name_id](const auto edge_id) {
-                       return node_based_graph.GetEdgeData(edge_id).name_id == required_name_id;
-                   });
+
+        const auto has_required_name = [this, required_name_id](const auto edge_id) {
+            return node_based_graph.GetEdgeData(edge_id).name_id == required_name_id;
+        };
+
+        // the beautiful way would be:
+        // return range.end() == std::find_if_not(range.begin(), range.end(), has_required_name);
+        // but that does not work due to range concepts
+        for( const auto eid : range )
+            if( !has_required_name(eid) )
+                return false;
+
+        return true;
     };
 
     const auto degree_three_connect_in = all_same_name_and_degree_three(intersection_node);
